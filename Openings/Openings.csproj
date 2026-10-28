@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Openings — PROTOTYPE build. Two assemblies, split at the .NET Framework / .NET boundary:
+
+        net48           Revit 2022-2024, compiled against the 2022 API   bin\<Config>\Openings.dll
+        net8.0-windows  Revit 2025+,     compiled against the 2025 API   bin\<Config>\net8\Openings.dll
+
+    Tested through Add-in Manager for now. Each half is compiled against the OLDEST
+    release it serves. The net8 half uses the Revit 2025.0.2 reference assemblies from
+    NuGet (see the revit-net8-split skill: a locally installed 2025.5+ RevitAPI is
+    built against .NET 10 and cannot be referenced from net8).
+
+    When the prototype graduates: branding.props / Directory.Build.props, App.cs
+    (vixeldorf-ribbon) and the installer, the same way as Link Section Box.
+  -->
+
+  <PropertyGroup>
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    <OutputType>Library</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <Deterministic>true</Deterministic>
+    <Nullable>disable</Nullable>
+
+    <RootNamespace>Openings</RootNamespace>
+    <AssemblyName>Openings</AssemblyName>
+    <Version>0.1.0.0</Version>
+    <Company>Vixeldorf</Company>
+    <Product>Vixeldorf Openings</Product>
+
+    <!-- net48 keeps the plain path; net8 goes one level down so the two same-named
+         DLLs never overwrite each other. Separate obj folders stop the two inner
+         builds racing on shared intermediates. -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <OutputPath Condition=" '$(TargetFramework)' == 'net8.0-windows' ">bin\$(Configuration)\net8\</OutputPath>
+    <IntermediateOutputPath Condition=" '$(TargetFramework)' == 'net48' ">obj\$(Configuration)\net48\</IntermediateOutputPath>
+    <IntermediateOutputPath Condition=" '$(TargetFramework)' == 'net8.0-windows' ">obj\$(Configuration)\net8\</IntermediateOutputPath>
+
+    <NoWarn Condition=" '$(TargetFramework)' == 'net8.0-windows' ">$(NoWarn);CA1416</NoWarn>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <RevitApiVersion Condition=" '$(RevitApiVersion)' == '' and '$(TargetFramework)' == 'net48' ">2022</RevitApiVersion>
+    <AutodeskRoot Condition=" '$(AutodeskRoot)' == '' ">$(ProgramW6432)\Autodesk</AutodeskRoot>
+    <AutodeskRoot Condition=" !Exists('$(AutodeskRoot)') ">$(ProgramFiles)\Autodesk</AutodeskRoot>
+    <RevitApiDir>$(AutodeskRoot)\Revit $(RevitApiVersion)</RevitApiDir>
+  </PropertyGroup>
+
+  <Target Name="VerifyRevitApiPresent" BeforeTargets="ResolveAssemblyReferences" Condition=" '$(TargetFramework)' == 'net48' ">
+    <Error Condition=" !Exists('$(RevitApiDir)\RevitAPI.dll') "
+           Text="Revit $(RevitApiVersion) API not found at '$(RevitApiDir)'. Install Revit $(RevitApiVersion), or override with -p:RevitApiVersion=&lt;year&gt; / -p:AutodeskRoot=&lt;path&gt;." />
+  </Target>
+
+  <ItemGroup>
+    <!-- Loadable-family builder, kept for the later "own families" mode; not compiled yet. -->
+    <Compile Remove="Future\**" />
+    <None Include="Future\**" />
+  </ItemGroup>
+
+  <!-- net48: the oldest supported Revit (2022). Private=false: these ship with
+       Revit and must never be copied next to the add-in. -->
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net48' ">
+    <Reference Include="RevitAPI">
+      <HintPath>$(RevitApiDir)\RevitAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RevitAPIUI">
+      <HintPath>$(RevitApiDir)\RevitAPIUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- net8: reference assemblies for the oldest 2025 release, from NuGet.
+       ExcludeAssets=runtime keeps every Revit DLL out of the output folder. -->
+  <ItemGroup Condition=" '$(TargetFramework)' == 'net8.0-windows' ">
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2025.0.2" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2025.0.2" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
