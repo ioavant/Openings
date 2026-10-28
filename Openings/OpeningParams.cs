@@ -39,6 +39,9 @@ namespace Openings
         /// <summary>Unique per project: kept while the opening is updated, never handed to two openings.</summary>
         public static readonly OpeningParam OpeningId = new OpeningParam("Opening ID", "6E445977-CB82-4BBA-A2E2-BDF3735105CA", SpecTypeId.Int.Integer, GroupTypeId.IdentityData);
 
+        /// <summary>Locked: a run over the whole view leaves the opening alone; a run on selected elements still updates it.</summary>
+        public static readonly OpeningParam Locked = new OpeningParam("Opening Lock", "C1D39D34-BDB6-4AFE-98A4-CCD9DAC43764", SpecTypeId.Boolean.YesNo, GroupTypeId.IdentityData);
+
         public static readonly OpeningParam Width    = new OpeningParam("Opening Width",    "017C58C4-62F1-413D-81E1-89A29C037119", SpecTypeId.Length, GroupTypeId.Geometry);
         public static readonly OpeningParam Height   = new OpeningParam("Opening Height",   "64DB7E30-E019-4B3A-9358-4CB1D5AA2072", SpecTypeId.Length, GroupTypeId.Geometry);
         public static readonly OpeningParam Length   = new OpeningParam("Opening Length",   "5314D699-017E-466D-B063-C6118A0DE9FF", SpecTypeId.Length, GroupTypeId.Geometry);
@@ -63,7 +66,7 @@ namespace Openings
         {
             get
             {
-                yield return OpeningId;
+                yield return OpeningId; yield return Locked;
                 yield return Width; yield return Height; yield return Length; yield return Depth; yield return Diameter;
                 yield return BottomFromFloor; yield return CenterFromFloor;
                 yield return BottomElevPbp; yield return CenterElevPbp; yield return BottomElevSp; yield return CenterElevSp;

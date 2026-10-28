@@ -18,7 +18,8 @@ namespace Openings
         public string HostKey;                         // null: placed before keys were stored
         public HashSet<long> Meps = new HashSet<long>();
         public XYZ XDir;                               // opening's X (along the wall); null on older openings
-        public bool Manual;                            // size edited by hand: a re-run leaves it alone
+        public bool Manual;                            // older "edited by hand" flag in the key; counts as locked
+        public bool Locked;                            // Opening Lock: a whole-view run leaves it alone
 
         public static List<ExistingOpening> Collect(Document doc)
         {
@@ -49,6 +50,8 @@ namespace Openings
                     else if (part == "manual=1") e.Manual = true;
                 }
                 if (e.HostKey != null && e.Meps.Count == 0) e.HostKey = null;
+                Parameter lp = ds.get_Parameter(OpeningParams.Locked.Guid);
+                e.Locked = e.Manual || (lp != null && lp.HasValue && lp.AsInteger() == 1);
                 list.Add(e);
             }
             return list;
@@ -82,8 +85,9 @@ namespace Openings
         public Dictionary<OpeningPlan, ExistingOpening> Reuse { get; } = new Dictionary<OpeningPlan, ExistingOpening>();
         public List<ExistingOpening> Obsolete { get; } = new List<ExistingOpening>();
 
+        /// <param name="respectLocks">Whole-view run: locked openings are neither updated (see OpeningPlacer) nor deleted.</param>
         public OpeningMatcher(List<ExistingOpening> existing, List<OpeningPlan> plans,
-                              ISet<long> checkedMeps, ISet<string> checkedHosts)
+                              ISet<long> checkedMeps, ISet<string> checkedHosts, bool respectLocks)
         {
             var candidates = new List<(OpeningPlan plan, ExistingOpening e, int overlap, double dist)>();
             foreach (OpeningPlan plan in plans)
@@ -120,6 +124,7 @@ namespace Openings
             foreach (ExistingOpening e in existing)
             {
                 if (taken.Contains(e) || e.HostKey == null) continue;
+                if (respectLocks && e.Locked) continue;
                 bool noLongerCrosses = checkedHosts.Contains(e.HostKey) && e.Meps.All(checkedMeps.Contains);
                 if (superseded.Contains(e) || noLongerCrosses)
                     Obsolete.Add(e);

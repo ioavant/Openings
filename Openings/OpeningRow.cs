@@ -7,7 +7,11 @@ namespace Openings
     /// <summary>One line of the main window's list: an opening's parameters, already formatted.</summary>
     public class OpeningRow
     {
+        /// <summary>The opening's ElementId value; negative for an opening the user deleted (DeletedOpening.RowId).</summary>
         public long ElementId { get; set; }
+        public bool IsLocked { get; set; }
+        public bool IsDeleted => ElementId < 0;
+        public string Status { get; set; }
         public int? OpeningId { get; set; }
         public string HostType { get; set; }
         public string Shape { get; set; }
@@ -25,6 +29,7 @@ namespace Openings
             string Len(double? v) => v.HasValue ? UnitFormatUtils.Format(units, SpecTypeId.Length, v.Value, false) : "";
 
             List<OpeningRow> rows = new List<OpeningRow>();
+            Dictionary<long, DeletedOpening> known = new Dictionary<long, DeletedOpening>();
             foreach (ExistingOpening e in ExistingOpening.Collect(doc))
             {
                 DirectShape ds = e.Shape;
@@ -35,9 +40,10 @@ namespace Openings
                     : Len(Number(ds, OpeningParams.Width)) + " × " +
                       Len(Number(ds, hostType == "Floor" ? OpeningParams.Length : OpeningParams.Height));
 
-                rows.Add(new OpeningRow
+                OpeningRow row = new OpeningRow
                 {
                     ElementId = ds.Id.GetValue(),
+                    IsLocked = e.Locked,
                     OpeningId = Integer(ds, OpeningParams.OpeningId),
                     HostType = hostType,
                     Shape = shape,
@@ -47,8 +53,35 @@ namespace Openings
                     Host = Text(ds, OpeningParams.HostInfo),
                     Floor = Text(ds, OpeningParams.FloorInfo),
                     Mep = Text(ds, OpeningParams.MepInfo)
-                });
+                };
+                rows.Add(row);
+
+                // What the updater needs to describe this opening if the user deletes it.
+                if (e.HostKey != null)
+                    known[row.ElementId] = new DeletedOpening
+                    {
+                        HostKey = e.HostKey, Meps = new HashSet<long>(e.Meps), OpeningId = row.OpeningId,
+                        HostType = row.HostType, Shape = row.Shape, Size = row.Size, Level = row.Level,
+                        Host = row.Host, Mep = row.Mep
+                    };
             }
+            OpeningUpdater.Remember(doc, known);
+
+            // Openings the user deleted: listed (locked) so they can be unlocked and come back.
+            foreach (DeletedOpening d in DeletedOpenings.Read(doc))
+                rows.Add(new OpeningRow
+                {
+                    ElementId = d.RowId,
+                    IsLocked = true,
+                    Status = "Deleted",
+                    OpeningId = d.OpeningId,
+                    HostType = d.HostType,
+                    Shape = d.Shape,
+                    Size = d.Size,
+                    Level = d.Level,
+                    Host = d.Host,
+                    Mep = d.Mep
+                });
             return rows.OrderBy(r => r.OpeningId ?? int.MaxValue).ThenBy(r => r.ElementId).ToList();
         }
 

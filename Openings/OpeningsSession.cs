@@ -14,11 +14,13 @@ namespace Openings
         Place,     // run the placement with the ticked models
         Select,    // select (and show) the given openings in Revit
         Delete,    // delete the given openings
-        EditWidth, // start the plan sketch for a wall opening's width (the given row, or pick in the model)
+        Edit,      // start the sketch for an opening (the given row, or pick in the model)
         EditApply, // read the sketch back into the opening
         EditCancel,// drop the sketch
         Section,   // temporary section through a wall opening (the given row, or pick in the model)
-        Cleanup    // palette closed: drop a running sketch and the temporary sections
+        Cleanup,   // palette closed: drop a running sketch and the temporary sections
+        Lock,      // set Opening Lock on the given openings
+        Unlock     // clear it; for a deleted opening (negative id) forget the deletion, so a run recreates it
     }
 
     /// <summary>
@@ -39,6 +41,7 @@ namespace Openings
             // ExternalEvent.Create needs an API context, which IExternalCommand.Execute is.
             if (_handler == null) _handler = new OpeningsHandler();
             if (_event == null) _event = ExternalEvent.Create(_handler);
+            OpeningUpdater.Register(uiapp.ActiveAddInId);
 
             if (Window == null || !Window.IsLoaded)
             {
@@ -110,7 +113,13 @@ namespace Openings
 
             foreach (var item in batch)
             {
-                try { Run(app, item.action, item.ids); }
+                // Everything here is the add-in's own doing, except Delete: an opening the user deletes
+                // from the palette is remembered like one deleted in Revit, so a run does not recreate it.
+                try
+                {
+                    using (item.action == OpeningsAction.Delete ? null : new OwnChanges())
+                        Run(app, item.action, item.ids);
+                }
                 catch (Exception ex) { TaskDialog.Show("Openings", $"{item.action} failed:\n{ex.Message}"); }
             }
         }
@@ -147,38 +156,44 @@ namespace Openings
                     break;
                 }
 
-                case OpeningsAction.EditWidth:
+                case OpeningsAction.Edit:
                 {
                     if (_editor != null) break;
-                    WallOpening w = Resolve(uidoc, ids, "Pick the wall opening whose width to edit.  ESC = cancel.");
-                    if (w == null) break;
-                    _editor = OpeningEditor.Start(uidoc, w);
-                    if (_editor != null)
-                        OpeningsSession.Window?.EnterEditMode(
-                            $"Editing the width of opening {(w.OpeningId.HasValue ? "#" + w.OpeningId : w.Shape.Id.GetValue().ToString())}: " +
-                            "move the two red side lines in the plan (Move, drag, Align…), then Apply.");
+                    ExistingOpening e = Resolve(uidoc, ids, false, "Pick the opening to edit.  ESC = cancel.");
+                    if (e == null) break;
+                    _editor = OpeningEditor.Start(uidoc, e);
+                    if (_editor != null) OpeningsSession.Window?.EnterEditMode(_editor.Hint);
                     break;
                 }
 
                 case OpeningsAction.EditApply:
-                case OpeningsAction.EditCancel:
                 {
-                    OpeningEditor ed = _editor;
+                    if (_editor == null) { OpeningsSession.Window?.ExitEditMode(); break; }
+                    bool ok = _editor.Apply(doc, out string msg, out bool keepEditing);
+                    if (msg != null) TaskDialog.Show("Openings", msg);
+                    if (keepEditing) break;   // the sketch is still there to fix
+
+                    long changed = _editor.OpeningElementId;
                     _editor = null;
                     OpeningsSession.Window?.ExitEditMode();
-                    if (ed == null) break;
+                    OpeningsSession.RefreshWindow(app, ok ? new List<ElementId> { ElementIdExtensions.FromValue(changed) } : null);
+                    break;
+                }
 
-                    List<ElementId> changed = null;
-                    if (action == OpeningsAction.EditCancel) ed.Cancel(doc);
-                    else if (ed.Apply(doc, out string msg)) changed = new List<ElementId> { ElementIdExtensions.FromValue(ed.OpeningElementId) };
-                    else if (msg != null) TaskDialog.Show("Openings", msg);
-                    OpeningsSession.RefreshWindow(app, changed);
+                case OpeningsAction.EditCancel:
+                {
+                    _editor?.Cancel(doc);
+                    _editor = null;
+                    OpeningsSession.Window?.ExitEditMode();
+                    OpeningsSession.RefreshWindow(app, null);
                     break;
                 }
 
                 case OpeningsAction.Section:
                 {
-                    WallOpening w = Resolve(uidoc, ids, "Pick the wall opening to show in a section.  ESC = cancel.");
+                    ExistingOpening e = Resolve(uidoc, ids, true, "Pick the wall opening to show in a section.  ESC = cancel.");
+                    WallOpening w = e == null ? null : WallOpening.From(e);
+                    if (e != null && w == null) TaskDialog.Show("Openings", "Choose an opening in a wall (rectangular or round).");
                     if (w != null) OpeningSection.Show(uidoc, w);
                     break;
                 }
@@ -187,6 +202,33 @@ namespace Openings
                     if (_editor != null) { _editor.Cancel(doc); _editor = null; }
                     OpeningSection.Cleanup(doc, uidoc.ActiveView?.Id);
                     break;
+
+                case OpeningsAction.Lock:
+                case OpeningsAction.Unlock:
+                {
+                    bool locking = action == OpeningsAction.Lock;
+                    SharedParamHelper.EnsureParameters(doc);   // projects from before Opening Lock existed
+                    using (Transaction t = new Transaction(doc, locking ? "Lock openings" : "Unlock openings"))
+                    {
+                        t.Start();
+                        foreach (ElementId id in Openings(doc, ids))
+                        {
+                            DirectShape ds = (DirectShape)doc.GetElement(id);
+                            Parameter p = ds.get_Parameter(OpeningParams.Locked.Guid);
+                            if (p != null && !p.IsReadOnly) p.Set(locking ? 1 : 0);
+                            if (!locking && (ds.ApplicationDataId ?? "").Contains(";manual=1"))
+                                ds.ApplicationDataId = ds.ApplicationDataId.Replace(";manual=1", "");
+                        }
+                        if (!locking && ids.Any(i => i < 0))
+                        {
+                            List<DeletedOpening> deleted = DeletedOpenings.Read(doc);
+                            if (deleted.RemoveAll(d => ids.Contains(d.RowId)) > 0) DeletedOpenings.Write(doc, deleted);
+                        }
+                        t.Commit();
+                    }
+                    OpeningsSession.RefreshWindow(app, null);
+                    break;
+                }
 
                 case OpeningsAction.Delete:
                 {
@@ -205,10 +247,10 @@ namespace Openings
         }
 
         /// <summary>
-        /// The wall opening of the chosen row, or — with no row chosen — one picked in the model
-        /// (palette hidden meanwhile, as ShaftMaster does). Null when cancelled or not a wall opening.
+        /// The opening of the chosen row, or — with no row chosen — one picked in the model
+        /// (palette hidden meanwhile, as ShaftMaster does). Null when cancelled.
         /// </summary>
-        private static WallOpening Resolve(UIDocument uidoc, List<long> ids, string prompt)
+        private static ExistingOpening Resolve(UIDocument uidoc, List<long> ids, bool wallsOnly, string prompt)
         {
             Document doc = uidoc.Document;
             ElementId id = null;
@@ -219,17 +261,13 @@ namespace Openings
                 OpeningsSession.Window?.Hide();
                 try
                 {
-                    id = uidoc.Selection.PickObject(ObjectType.Element, new WallOpeningFilter(), prompt).ElementId;
+                    id = uidoc.Selection.PickObject(ObjectType.Element, new OpeningFilter(wallsOnly), prompt).ElementId;
                 }
                 catch (Autodesk.Revit.Exceptions.OperationCanceledException) { return null; }
                 finally { OpeningsSession.Window?.Show(); }
             }
 
-            ExistingOpening e = ExistingOpening.Collect(doc).FirstOrDefault(o => o.Shape.Id == id);
-            WallOpening w = e == null ? null : WallOpening.From(e);
-            if (w == null)
-                TaskDialog.Show("Openings", "Choose an opening in a wall (rectangular or round).");
-            return w;
+            return ExistingOpening.Collect(doc).FirstOrDefault(o => o.Shape.Id == id);
         }
 
         /// <summary>The ids that are still openings of this add-in in this document.</summary>

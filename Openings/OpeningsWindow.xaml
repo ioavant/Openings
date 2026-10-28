@@ -36,7 +36,17 @@
                   GridLinesVisibility="All" HeadersVisibility="Column"
                   Background="White" RowBackground="White" AlternatingRowBackground="#F5FAFF">
             <DataGrid.Columns>
+                <DataGridTemplateColumn Header="Lock" Width="42">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <CheckBox IsChecked="{Binding IsLocked, Mode=OneWay}" HorizontalAlignment="Center"
+                                      VerticalAlignment="Center" Click="LockBox_Click"
+                                      ToolTip="Locked: a run over the whole view leaves it alone (a run on selected elements still updates it). Set automatically when the opening is edited, changed or deleted by hand."/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="ID" Binding="{Binding OpeningId}" Width="50"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="60"/>
                 <DataGridTextColumn Header="Host" Binding="{Binding HostType}" Width="55"/>
                 <DataGridTextColumn Header="Shape" Binding="{Binding Shape}" Width="85"/>
                 <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="110"/>

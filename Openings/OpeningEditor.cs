@@ -22,8 +22,8 @@ namespace Openings
         public static WallOpening From(ExistingOpening e)
         {
             DirectShape ds = e.Shape;
-            if (Text(ds, OpeningParams.HostType) != "Wall") return null;
-            string shape = Text(ds, OpeningParams.Shape);
+            if (OpeningEditor.Text(ds, OpeningParams.HostType) != "Wall") return null;
+            string shape = OpeningEditor.Text(ds, OpeningParams.Shape);
             if (shape != "Rectangular" && shape != "Round") return null;
 
             WallOpening w = new WallOpening
@@ -31,15 +31,14 @@ namespace Openings
                 Existing = e,
                 Center = e.Center,
                 Round = shape == "Round",
-                Width = Number(ds, OpeningParams.Width),
-                Height = Number(ds, OpeningParams.Height),
-                Depth = Number(ds, OpeningParams.Depth),
-                Diameter = Number(ds, OpeningParams.Diameter)
+                Width = OpeningEditor.Number(ds, OpeningParams.Width),
+                Height = OpeningEditor.Number(ds, OpeningParams.Height),
+                Depth = OpeningEditor.Number(ds, OpeningParams.Depth),
+                Diameter = OpeningEditor.Number(ds, OpeningParams.Diameter),
+                OpeningId = OpeningEditor.IdOf(ds)
             };
-            Parameter idp = ds.get_Parameter(OpeningParams.OpeningId.Guid);
-            if (idp != null && idp.HasValue) w.OpeningId = idp.AsInteger();
             if (w.Round) { w.Width = w.Height = w.Diameter; }
-            if (w.Width <= 0 || w.Depth <= 0) return null;
+            if (w.Width <= 0 || w.Height <= 0 || w.Depth <= 0) return null;
 
             XYZ x = e.XDir ?? XFromGeometry(ds, w.Depth);
             if (x == null) return null;
@@ -85,136 +84,396 @@ namespace Openings
             }).First();
             return y.CrossProduct(XYZ.BasisZ);
         }
+    }
 
-        private static string Text(Element e, OpeningParam op)
-        {
-            Parameter p = e.get_Parameter(op.Guid);
-            return p != null && p.HasValue ? p.AsString() : null;
-        }
+    /// <summary>A floor opening as it stands in the model: its plan profile (the bottom face) and depth.</summary>
+    public class FloorOpening
+    {
+        public ExistingOpening Existing;
+        public DirectShape Shape => Existing.Shape;
+        public CurveLoop Profile;     // at the bottom of the opening
+        public double BottomZ, Depth;
+        public Frame Frame;
+        public int? OpeningId;
 
-        private static double Number(Element e, OpeningParam op)
+        public static FloorOpening From(ExistingOpening e)
         {
-            Parameter p = e.get_Parameter(op.Guid);
-            return p != null && p.HasValue ? p.AsDouble() : 0;
+            DirectShape ds = e.Shape;
+            if (OpeningEditor.Text(ds, OpeningParams.HostType) != "Floor") return null;
+            CurveLoop loop = ShaftProfile.Read(GeometryUtils.GetSolids(ds, null));
+            double depth = OpeningEditor.Number(ds, OpeningParams.Depth);
+            if (loop == null || depth <= 0) return null;
+
+            return new FloorOpening
+            {
+                Existing = e,
+                Profile = loop,
+                BottomZ = loop.First().GetEndPoint(0).Z,
+                Depth = depth,
+                Frame = Frame.Horizontal(e.XDir ?? XYZ.BasisX),
+                OpeningId = OpeningEditor.IdOf(ds)
+            };
         }
     }
 
-    /// <summary>Lets Selection.PickObject take only this add-in's wall openings.</summary>
-    public class WallOpeningFilter : ISelectionFilter
+    /// <summary>Lets Selection.PickObject take only this add-in's openings (optionally only those in walls).</summary>
+    public class OpeningFilter : ISelectionFilter
     {
+        private readonly bool _wallsOnly;
+        public OpeningFilter(bool wallsOnly) { _wallsOnly = wallsOnly; }
+
         public bool AllowElement(Element elem)
         {
             if (!(elem is DirectShape ds) || ds.ApplicationId != OpeningParams.AppId) return false;
-            Parameter p = ds.get_Parameter(OpeningParams.HostType.Guid);
-            return p != null && p.HasValue && p.AsString() == "Wall";
+            return !_wallsOnly || OpeningEditor.Text(ds, OpeningParams.HostType) == "Wall";
         }
 
         public bool AllowReference(Reference reference, XYZ position) => false;
     }
 
     /// <summary>
-    /// Width (diameter) of a wall opening edited by sketch, the ShaftMaster way: plain model lines the
-    /// user works on with Revit's own tools, read back when they are done. Here the opening's two side
-    /// edges are drawn in the plan; the user moves them (Move, drag, Align…) and presses Apply in the
-    /// palette. The distance between them along the wall is the new width, their middle the new centre.
+    /// An opening edited by sketch, the ShaftMaster way: plain model lines the user works on with
+    /// Revit's own tools (Move, drag, Align, draw, delete…), read back when they press Apply in the
+    /// palette. What is drawn depends on the opening and the active view:
+    /// <list type="bullet">
+    /// <item>wall opening, plan — its two side edges: width (diameter) and position along the wall;</item>
+    /// <item>wall opening, section facing the wall — sides, top and bottom: width and height;</item>
+    /// <item>floor opening, plan — its whole profile: any closed shape (rectangle, circle or free).</item>
+    /// </list>
+    /// The edited opening is locked, so a run over the whole view leaves it as the user made it.
     /// </summary>
     public class OpeningEditor
     {
+        private enum Mode { WallPlan, WallSection, FloorProfile }
+
         private const int LineWeight = 8;
+        private static readonly double Join = 0.5 / 304.8;      // endpoints this close are one point
+        private static readonly double Bridge = 50 / 304.8;     // gaps up to this are closed with a line
+
+        private Mode _mode;
+        private double _planeZ;
+        private HashSet<long> _linesBefore;                    // floor profile: model lines that existed already
 
         public long OpeningElementId { get; private set; }
         public int? OpeningId { get; private set; }
+        public string Hint { get; private set; }
         public List<ElementId> LineIds { get; } = new List<ElementId>();
 
+        // ── Start ─────────────────────────────────────────────────────────────
+
         /// <summary>API context, outside a transaction. Null (after telling the user why) if it cannot start.</summary>
-        public static OpeningEditor Start(UIDocument uidoc, WallOpening w)
+        public static OpeningEditor Start(UIDocument uidoc, ExistingOpening e)
         {
             Document doc = uidoc.Document;
-            if (!(doc.ActiveView is ViewPlan plan) || plan.IsTemplate)
+            View view = doc.ActiveView;
+            WallOpening w = WallOpening.From(e);
+            FloorOpening f = w == null ? FloorOpening.From(e) : null;
+            if (w == null && f == null)
             {
-                TaskDialog.Show("Openings", "Open a floor plan to edit the width: the opening's side lines are drawn there.");
+                TaskDialog.Show("Openings", "This opening cannot be edited (unknown shape or size).");
                 return null;
             }
 
-            double z = plan.GenLevel?.ProjectElevation ?? w.Center.Z;
-            XYZ c = new XYZ(w.Center.X, w.Center.Y, z);
-            XYZ x = w.Frame.X, y = w.Frame.Y;
-            double half = w.Width / 2, d = w.Depth / 2;
+            OpeningEditor ed = new OpeningEditor { OpeningElementId = e.Shape.Id.GetValue(), OpeningId = w?.OpeningId ?? f?.OpeningId };
+            string name = ed.OpeningId.HasValue ? "#" + ed.OpeningId : e.Shape.Id.GetValue().ToString();
 
-            OpeningEditor ed = new OpeningEditor { OpeningElementId = w.Shape.Id.GetValue(), OpeningId = w.OpeningId };
-            using (Transaction t = new Transaction(doc, "Openings: edit width"))
+            if (w != null && view is ViewPlan && !view.IsTemplate)
+            {
+                ed._mode = Mode.WallPlan;
+                ed.Hint = $"Opening {name}: move the two red side lines in the plan (Move, drag, Align…) to set the " +
+                          (w.Round ? "diameter" : "width") + ", then Apply.";
+            }
+            else if (w != null && view is ViewSection vs && !vs.IsTemplate &&
+                     Math.Abs(vs.ViewDirection.DotProduct(w.Frame.Y)) > 0.9)
+            {
+                ed._mode = Mode.WallSection;
+                ed.Hint = $"Opening {name}: move the red side lines (width) and top / bottom lines (height)" +
+                          (w.Round ? " — a round opening takes the size you changed as its diameter" : "") + ", then Apply.";
+            }
+            else if (f != null && view is ViewPlan && !view.IsTemplate)
+            {
+                ed._mode = Mode.FloorProfile;
+                ed.Hint = $"Opening {name}: edit the red profile in the plan — move, drag, delete or draw model lines " +
+                          "until it is one closed shape — then Apply.";
+            }
+            else
+            {
+                TaskDialog.Show("Openings", w != null
+                    ? "Open a floor plan (width) or a section facing the wall — the Section button makes one — (width and height)."
+                    : "Open a floor plan to edit a floor opening's profile.");
+                return null;
+            }
+
+            using (Transaction t = new Transaction(doc, "Openings: edit"))
             {
                 t.Start();
-                SketchPlane sp = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, c));
-
-                OverrideGraphicSettings ogs = new OverrideGraphicSettings();
-                ogs.SetProjectionLineColor(new Color(230, 0, 60));
-                ogs.SetProjectionLineWeight(LineWeight);
-
-                for (int side = -1; side <= 1; side += 2)
-                {
-                    XYZ mid = c + x * (side * half);
-                    ModelCurve mc = doc.Create.NewModelCurve(Line.CreateBound(mid - y * d, mid + y * d), sp);
-                    plan.SetElementOverrides(mc.Id, ogs);
-                    ed.LineIds.Add(mc.Id);
-                }
+                if (ed._mode == Mode.WallPlan) ed.DrawWallPlan(doc, (ViewPlan)view, w);
+                else if (ed._mode == Mode.WallSection) ed.DrawWallSection(doc, (ViewSection)view, w);
+                else ed.DrawFloorProfile(doc, (ViewPlan)view, f);
                 t.Commit();
             }
             uidoc.Selection.SetElementIds(ed.LineIds);
             return ed;
         }
 
-        /// <summary>API context. Rebuilds the opening from the lines, then removes them. False: nothing changed.</summary>
-        public bool Apply(Document doc, out string message)
+        private void DrawWallPlan(Document doc, ViewPlan plan, WallOpening w)
+        {
+            _planeZ = plan.GenLevel?.ProjectElevation ?? w.Center.Z;
+            XYZ c = new XYZ(w.Center.X, w.Center.Y, _planeZ);
+            SketchPlane sp = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, c));
+            XYZ x = w.Frame.X, y = w.Frame.Y;
+            for (int side = -1; side <= 1; side += 2)
+            {
+                XYZ mid = c + x * (side * w.Width / 2);
+                AddLine(doc, plan, sp, Line.CreateBound(mid - y * (w.Depth / 2), mid + y * (w.Depth / 2)));
+            }
+        }
+
+        private void DrawWallSection(Document doc, ViewSection view, WallOpening w)
+        {
+            // On the section's cut plane, so the lines are never hidden behind the wall.
+            XYZ n = view.ViewDirection;
+            XYZ c = w.Center - n * (w.Center - view.Origin).DotProduct(n);
+            SketchPlane sp = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(n, c));
+            XYZ x = w.Frame.X, z = XYZ.BasisZ;
+            double hw = w.Width / 2, hh = w.Height / 2;
+            for (int side = -1; side <= 1; side += 2)
+            {
+                AddLine(doc, view, sp, Line.CreateBound(c + x * (side * hw) - z * hh, c + x * (side * hw) + z * hh));
+                AddLine(doc, view, sp, Line.CreateBound(c + z * (side * hh) - x * hw, c + z * (side * hh) + x * hw));
+            }
+        }
+
+        private void DrawFloorProfile(Document doc, ViewPlan plan, FloorOpening f)
+        {
+            _planeZ = plan.GenLevel?.ProjectElevation ?? f.BottomZ;
+            Transform move = Transform.CreateTranslation(new XYZ(0, 0, _planeZ - f.BottomZ));
+            SketchPlane sp = SketchPlane.Create(doc, Plane.CreateByNormalAndOrigin(XYZ.BasisZ, new XYZ(0, 0, _planeZ)));
+            _linesBefore = new HashSet<long>(ModelCurveIds(doc));
+            foreach (Curve c in f.Profile)
+                AddLine(doc, plan, sp, c.CreateTransformed(move));
+        }
+
+        private void AddLine(Document doc, View view, SketchPlane sp, Curve curve)
+        {
+            OverrideGraphicSettings ogs = new OverrideGraphicSettings();
+            ogs.SetProjectionLineColor(new Color(230, 0, 60));
+            ogs.SetProjectionLineWeight(LineWeight);
+
+            ModelCurve mc = doc.Create.NewModelCurve(curve, sp);
+            view.SetElementOverrides(mc.Id, ogs);
+            LineIds.Add(mc.Id);
+        }
+
+        // ── Apply ─────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// API context. Rebuilds the opening from the lines, then removes them. False with a message:
+        /// for a sketch that cannot be read the lines stay, so the user can fix it and Apply again
+        /// (<paramref name="keepEditing"/>); otherwise the edit is over.
+        /// </summary>
+        public bool Apply(Document doc, out string message, out bool keepEditing)
         {
             message = null;
-            DirectShape ds = doc.GetElement(ElementIdExtensions.FromValue(OpeningElementId)) as DirectShape;
-            ExistingOpening e = ds == null ? null : ExistingOpening.Collect(doc).FirstOrDefault(o => o.Shape.Id == ds.Id);
-            WallOpening w = e == null ? null : WallOpening.From(e);
-            if (w == null) { message = "The opening is no longer in the model."; Cancel(doc); return false; }
+            keepEditing = false;
+            ExistingOpening e = ExistingOpening.Collect(doc).FirstOrDefault(o => o.Shape.Id.GetValue() == OpeningElementId);
+            if (e == null) { message = "The opening is no longer in the model."; Cancel(doc); return false; }
 
-            List<Line> lines = LineIds.Select(id => doc.GetElement(id)).OfType<ModelCurve>()
-                .Select(mc => mc.GeometryCurve).OfType<Line>().ToList();
-            if (lines.Count != 2)
+            try
             {
-                message = "Keep exactly the two side lines (they were deleted or replaced). Nothing changed.";
-                Cancel(doc);
+                if (_mode == Mode.FloorProfile) ApplyFloor(doc, e);
+                else ApplyWall(doc, e);
+                return true;
+            }
+            catch (SketchException ex)
+            {
+                message = ex.Message;
+                keepEditing = true;
                 return false;
             }
+        }
 
-            // Each line counts at its middle, projected on the wall direction through the opening centre.
+        private class SketchException : Exception
+        {
+            public SketchException(string message) : base(message) { }
+        }
+
+        private List<Curve> Lines(Document doc) =>
+            LineIds.Select(id => doc.GetElement(id)).OfType<ModelCurve>().Select(mc => mc.GeometryCurve).ToList();
+
+        private void ApplyWall(Document doc, ExistingOpening e)
+        {
+            WallOpening w = WallOpening.From(e) ?? throw new SketchException("The opening can no longer be read.");
+            List<Line> lines = Lines(doc).OfType<Line>().ToList();
             XYZ x = w.Frame.X;
-            double a = (lines[0].Evaluate(0.5, true) - w.Center).DotProduct(x);
-            double b = (lines[1].Evaluate(0.5, true) - w.Center).DotProduct(x);
-            double width = Math.Abs(a - b);
-            if (width < 10 / 304.8) { message = "The lines are (almost) on top of each other. Nothing changed."; Cancel(doc); return false; }
 
-            double oldBottom = w.Center.Z - (w.Round ? w.Diameter : w.Height) / 2;
-            w.Center += x * ((a + b) / 2);
-            if (w.Round) w.Diameter = w.Width = w.Height = width;
-            else w.Width = width;
-            double bottomDelta = (w.Center.Z - (w.Round ? w.Diameter : w.Height) / 2) - oldBottom;
+            // A line counts at its middle; side lines run across the width direction, the others along it.
+            List<double> sides = lines.Where(l => Math.Abs(l.Direction.DotProduct(x)) < 0.5)
+                .Select(l => (l.Evaluate(0.5, true) - w.Center).DotProduct(x)).ToList();
+            List<double> levels = lines.Where(l => Math.Abs(l.Direction.DotProduct(x)) >= 0.5)
+                .Select(l => l.Evaluate(0.5, true).Z - w.Center.Z).ToList();
 
-            using (Transaction t = new Transaction(doc, "Openings: apply width"))
+            if (sides.Count != 2 || (_mode == Mode.WallSection && levels.Count != 2))
+                throw new SketchException(_mode == Mode.WallSection
+                    ? "Keep the two side lines and the top and bottom lines (one of them was deleted, or a line was added)."
+                    : "Keep exactly the two side lines (one was deleted, or a line was added).");
+
+            double width = Math.Abs(sides[0] - sides[1]);
+            double dx = (sides[0] + sides[1]) / 2;
+            double height = w.Height, dz = 0;
+            if (_mode == Mode.WallSection)
+            {
+                height = Math.Abs(levels[0] - levels[1]);
+                dz = (levels[0] + levels[1]) / 2;
+            }
+            if (width < 10 / 304.8 || height < 10 / 304.8)
+                throw new SketchException("Two lines are (almost) on top of each other.");
+
+            double oldCenterZ = w.Center.Z;
+            double oldBottom = oldCenterZ - w.Height / 2;
+            w.Center += x * dx + XYZ.BasisZ * dz;
+            if (w.Round)
+            {
+                // One size for both: the one the user changed (the larger change if both were).
+                double d = Math.Abs(width - w.Diameter) >= Math.Abs(height - w.Diameter) ? width : height;
+                w.Diameter = w.Width = w.Height = d;
+            }
+            else { w.Width = width; w.Height = height; }
+
+            double centerDelta = w.Center.Z - oldCenterZ;
+            double bottomDelta = (w.Center.Z - w.Height / 2) - oldBottom;
+
+            using (Transaction t = new Transaction(doc, "Openings: apply edit"))
             {
                 t.Start();
                 DeleteLines(doc);
+                DirectShape ds = e.Shape;
+                OpeningPlan plan = w.ToPlan();
+                ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(plan) });
+                OpeningPlacer.WriteSize(ds, plan, null);
+                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, x, false);
+                OpeningPlacer.SetParam(ds, OpeningParams.Locked, 1, null);
 
-                ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(w.ToPlan()) });
-                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, x, true);
-
-                if (w.Round)
-                {
-                    Set(ds, OpeningParams.Diameter, w.Diameter);
-                    Shift(ds, OpeningParams.BottomFromFloor, bottomDelta);
-                    Shift(ds, OpeningParams.BottomElevPbp, bottomDelta);
-                    Shift(ds, OpeningParams.BottomElevSp, bottomDelta);
-                }
-                else Set(ds, OpeningParams.Width, w.Width);
+                Shift(ds, OpeningParams.CenterFromFloor, centerDelta);
+                Shift(ds, OpeningParams.CenterElevPbp, centerDelta);
+                Shift(ds, OpeningParams.CenterElevSp, centerDelta);
+                Shift(ds, OpeningParams.BottomFromFloor, bottomDelta);
+                Shift(ds, OpeningParams.BottomElevPbp, bottomDelta);
+                Shift(ds, OpeningParams.BottomElevSp, bottomDelta);
                 t.Commit();
             }
-            return true;
         }
+
+        private void ApplyFloor(Document doc, ExistingOpening e)
+        {
+            FloorOpening f = FloorOpening.From(e) ?? throw new SketchException("The opening can no longer be read.");
+
+            // Our lines that are left, plus any the user drew on the same plane meanwhile.
+            List<Curve> curves = Lines(doc);
+            List<ElementId> drawn = new List<ElementId>();
+            foreach (long id in ModelCurveIds(doc))
+            {
+                if (_linesBefore.Contains(id) || LineIds.Any(l => l.GetValue() == id)) continue;
+                ModelCurve mc = doc.GetElement(ElementIdExtensions.FromValue(id)) as ModelCurve;
+                Curve c = mc?.GeometryCurve;
+                if (c == null || Math.Abs(c.GetEndPoint(0).Z - _planeZ) > 1e-3) continue;
+                curves.Add(c);
+                drawn.Add(mc.Id);
+            }
+
+            CurveLoop loop = Assemble(curves) ??
+                throw new SketchException("The red lines do not make one closed shape. Fix them (or Cancel) and Apply again.");
+            loop = CurveLoop.CreateViaTransform(loop, Transform.CreateTranslation(new XYZ(0, 0, f.BottomZ - _planeZ)));
+
+            ProfileShape shape = ShaftProfile.Classify(loop, out XYZ side);
+            Frame frame = shape == ProfileShape.Rectangle ? Frame.Horizontal(side) : f.Frame;
+            LocalBox box = LocalBox.Of(loop.SelectMany(c => c.Tessellate()), frame);
+            OpeningPlan plan = new OpeningPlan
+            {
+                Kind = HostKind.Floor,
+                Frame = frame,
+                Center = box.CenterIn(frame),
+                Width = box.MaxX - box.MinX,
+                Height = box.MaxY - box.MinY,
+                Depth = f.Depth
+            };
+            plan.Center = new XYZ(plan.Center.X, plan.Center.Y, f.BottomZ + f.Depth / 2);
+            if (shape == ProfileShape.Circle)
+            {
+                plan.Round = true;
+                plan.Diameter = Math.Max(plan.Width, plan.Height);
+            }
+            else if (shape == ProfileShape.Free)
+                plan.FreeProfile = loop;
+
+            using (Transaction t = new Transaction(doc, "Openings: apply edit"))
+            {
+                t.Start();
+                DeleteLines(doc);
+                if (drawn.Count > 0) doc.Delete(drawn);
+                DirectShape ds = e.Shape;
+                ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(plan) });
+                OpeningPlacer.WriteSize(ds, plan, null);
+                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, frame.X, false);
+                OpeningPlacer.SetParam(ds, OpeningParams.Locked, 1, null);
+                t.Commit();
+            }
+        }
+
+        /// <summary>
+        /// Chains the curves end to end into one closed loop (as ShaftMaster's AssembleCurveLoop does):
+        /// curves are reversed as needed, small gaps closed with a line. Null if they do not close.
+        /// A full circle the user drew is split in two halves.
+        /// </summary>
+        private static CurveLoop Assemble(List<Curve> input)
+        {
+            List<Curve> curves = new List<Curve>();
+            foreach (Curve c in input)
+            {
+                if (!c.IsBound && c is Arc circle)
+                {
+                    curves.Add(Arc.Create(circle.Center, circle.Radius, 0, Math.PI, circle.XDirection, circle.YDirection));
+                    curves.Add(Arc.Create(circle.Center, circle.Radius, Math.PI, 2 * Math.PI, circle.XDirection, circle.YDirection));
+                }
+                else if (c.IsBound && c.Length > Join) curves.Add(c);
+            }
+            if (curves.Count == 0) return null;
+
+            List<Curve> chain = new List<Curve> { curves[0] };
+            curves.RemoveAt(0);
+            while (curves.Count > 0)
+            {
+                XYZ end = chain[chain.Count - 1].GetEndPoint(1);
+                int best = -1; bool reverse = false; double bestDist = double.MaxValue;
+                for (int i = 0; i < curves.Count; i++)
+                {
+                    double d0 = curves[i].GetEndPoint(0).DistanceTo(end), d1 = curves[i].GetEndPoint(1).DistanceTo(end);
+                    if (d0 < bestDist) { bestDist = d0; best = i; reverse = false; }
+                    if (d1 < bestDist) { bestDist = d1; best = i; reverse = true; }
+                }
+                if (bestDist > Bridge) return null;   // a separate piece: not one shape
+
+                Curve next = reverse ? curves[best].CreateReversed() : curves[best];
+                curves.RemoveAt(best);
+                if (bestDist > Join) chain.Add(Line.CreateBound(end, next.GetEndPoint(0)));
+                chain.Add(next);
+            }
+
+            XYZ last = chain[chain.Count - 1].GetEndPoint(1), first = chain[0].GetEndPoint(0);
+            double gap = last.DistanceTo(first);
+            if (gap > Bridge) return null;
+            if (gap > Join) chain.Add(Line.CreateBound(last, first));
+
+            try
+            {
+                CurveLoop loop = new CurveLoop();
+                foreach (Curve c in chain) loop.Append(c);
+                return loop.IsOpen() ? null : loop;
+            }
+            catch { return null; }   // ends meet only within the gap tolerance, or the loop crosses itself
+        }
+
+        // ── Cancel / helpers ──────────────────────────────────────────────────
 
         /// <summary>API context: removes the lines, leaves the opening as it was.</summary>
         public void Cancel(Document doc)
@@ -222,7 +481,7 @@ namespace Openings
             if (LineIds.Count == 0) return;
             try
             {
-                using (Transaction t = new Transaction(doc, "Openings: cancel width edit"))
+                using (Transaction t = new Transaction(doc, "Openings: cancel edit"))
                 {
                     t.Start();
                     DeleteLines(doc);
@@ -239,16 +498,34 @@ namespace Openings
             LineIds.Clear();
         }
 
-        private static void Set(Element e, OpeningParam op, double value)
-        {
-            Parameter p = e.get_Parameter(op.Guid);
-            if (p != null && !p.IsReadOnly) p.Set(value);
-        }
+        // OfClass(typeof(ModelCurve)) throws on Revit 2023 (ShaftMaster's note): go through CurveElement.
+        private static IEnumerable<long> ModelCurveIds(Document doc) =>
+            new FilteredElementCollector(doc).OfClass(typeof(CurveElement)).Where(c => c is ModelCurve)
+                .Select(c => c.Id.GetValue());
 
         private static void Shift(Element e, OpeningParam op, double delta)
         {
+            if (Math.Abs(delta) < 1e-9) return;
             Parameter p = e.get_Parameter(op.Guid);
             if (p != null && !p.IsReadOnly && p.HasValue) p.Set(p.AsDouble() + delta);
+        }
+
+        internal static string Text(Element e, OpeningParam op)
+        {
+            Parameter p = e.get_Parameter(op.Guid);
+            return p != null && p.HasValue ? p.AsString() : null;
+        }
+
+        internal static double Number(Element e, OpeningParam op)
+        {
+            Parameter p = e.get_Parameter(op.Guid);
+            return p != null && p.HasValue ? p.AsDouble() : 0;
+        }
+
+        internal static int? IdOf(Element e)
+        {
+            Parameter p = e.get_Parameter(OpeningParams.OpeningId.Guid);
+            return p != null && p.HasValue ? p.AsInteger() : (int?)null;
         }
     }
 }

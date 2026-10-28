@@ -64,12 +64,31 @@ namespace Openings
 
             OpeningPlanner planner = new OpeningPlanner(settings);
             List<OpeningPlan> plans = planner.Plan(penetrations);
+            // A run over the whole view respects locks and the user's deletions; a run on selected
+            // elements is the user asking for exactly those, so it updates locked openings and brings
+            // deleted ones back.
+            bool selectedRun = scope == "Selected";
             OpeningMatcher matcher = new OpeningMatcher(existing, plans,
-                new HashSet<long>(meps.Select(m => m.Id.GetValue())), finder.CheckedHosts);
+                new HashSet<long>(meps.Select(m => m.Id.GetValue())), finder.CheckedHosts, !selectedRun);
+
+            List<DeletedOpening> deleted = DeletedOpenings.Read(doc);
+            List<DeletedOpening> revived = new List<DeletedOpening>();
+            int suppressed = 0;
+            foreach (OpeningPlan plan in plans.ToList())
+            {
+                if (matcher.Reuse.ContainsKey(plan)) continue;
+                List<DeletedOpening> hit = deleted.Where(d => d.Covers(plan)).ToList();
+                if (hit.Count == 0) continue;
+                if (selectedRun) revived.AddRange(hit);
+                else { plans.Remove(plan); suppressed++; }
+            }
+
             if (plans.Count == 0 && matcher.Obsolete.Count == 0)
             {
                 TaskDialog.Show("Openings",
-                    $"{scope}: {meps.Count} MEP elements — no intersections with the walls / floors visible in this view." +
+                        $"{scope}: {meps.Count} MEP elements — " +
+                    (suppressed > 0 ? $"{suppressed} openings were deleted by hand and stay deleted (unlock them in the list, or run on selected elements)."
+                                    : "no intersections with the walls / floors visible in this view.") +
                     Tail(warnings));
                 return none;
             }
@@ -78,8 +97,9 @@ namespace Openings
             SharedParamHelper.EnsureParameters(doc);
 
             // ── Place ─────────────────────────────────────────────────────────
-            OpeningPlacer placer = new OpeningPlacer(doc, existing, matcher);
+            OpeningPlacer placer = new OpeningPlacer(doc, existing, matcher, !selectedRun);
             int skipped = 0;
+            using (new OwnChanges())
             using (Transaction t = new Transaction(doc, "Place openings"))
             {
                 t.Start();
@@ -99,6 +119,8 @@ namespace Openings
                     }
                 }
                 placer.DeleteObsolete();
+                if (revived.Count > 0)
+                    DeletedOpenings.Write(doc, deleted.Except(revived).ToList());
                 t.Commit();
             }
 
@@ -108,8 +130,12 @@ namespace Openings
             sb.AppendLine($"Crossings found: {penetrations.Count}");
             sb.AppendLine($"Openings: {plans.Count} ({plans.Count(p => p.Round)} round, {planner.MergedGroups} merged)");
             sb.AppendLine($"Created: {placer.Created}, updated: {placer.Updated}, deleted: {placer.Deleted}, skipped: {skipped}");
-            if (placer.KeptManual > 0)
-                sb.AppendLine($"Kept as edited by hand: {placer.KeptManual} (delete them to recalculate)");
+            if (placer.KeptLocked > 0)
+                sb.AppendLine($"Locked, left as they are: {placer.KeptLocked} (run on selected elements, or unlock, to update)");
+            if (suppressed > 0)
+                sb.AppendLine($"Deleted by hand, not recreated: {suppressed}");
+            if (revived.Count > 0)
+                sb.AppendLine($"Recreated after a manual delete: {revived.Count}");
             if (placer.NoFloorFound > 0)
                 sb.AppendLine($"Wall openings with no floor found below: {placer.NoFloorFound}");
             if (placer.MissingParams.Any())

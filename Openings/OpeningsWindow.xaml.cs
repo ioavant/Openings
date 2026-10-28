@@ -38,8 +38,8 @@ namespace Openings
                 "Selected MEP elements, or\nall visible in the active view", AccentGradient(), Place));
             ButtonRow.Children.Add(MakeActionButton("Select",
                 "Select the chosen rows\nin the model", null, SelectRows));
-            ButtonRow.Children.Add(MakeActionButton("Edit Width",
-                "Wall opening: move its side\nlines in a plan view", null, () => OneOrPick(OpeningsAction.EditWidth)));
+            ButtonRow.Children.Add(MakeActionButton("Edit",
+                "Sketch: plan (width, floor\nprofile), section (+ height)", null, () => OneOrPick(OpeningsAction.Edit)));
             ButtonRow.Children.Add(MakeActionButton("Section",
                 "Wall opening: temporary\nsection through it", null, () => OneOrPick(OpeningsAction.Section)));
             ButtonRow.Children.Add(MakeActionButton("Delete",
@@ -120,10 +120,19 @@ namespace Openings
 
         // ── Actions ───────────────────────────────────────────────────────────
 
+        private void LockBox_Click(object sender, RoutedEventArgs e)
+        {
+            if (!((sender as CheckBox)?.DataContext is OpeningRow row)) return;
+            bool locked = (sender as CheckBox).IsChecked == true;
+            if (row.IsDeleted && locked) { (sender as CheckBox).IsChecked = true; return; }   // nothing to lock: it is gone
+            OpeningsSession.Raise(locked ? OpeningsAction.Lock : OpeningsAction.Unlock, new List<long> { row.ElementId });
+        }
+
         /// <summary>One chosen row, or none to pick the opening in the model.</summary>
         private void OneOrPick(OpeningsAction action)
         {
             List<long> ids = SelectedIds();
+            ids.RemoveAll(id => id < 0);   // deleted openings
             if (ids.Count > 1)
             {
                 MessageBox.Show(this, "Choose one opening in the list, or none to pick it in the model.", "Openings",

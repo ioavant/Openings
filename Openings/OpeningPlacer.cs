@@ -29,13 +29,16 @@ namespace Openings
         public int Updated { get; private set; }
         public int Deleted { get; private set; }
         public int NoFloorFound { get; private set; }
-        public int KeptManual { get; private set; }
+        public int KeptLocked { get; private set; }
         public List<ElementId> Touched { get; } = new List<ElementId>();
         public IEnumerable<string> MissingParams => _missingParams;
 
-        public OpeningPlacer(Document doc, List<ExistingOpening> existing, OpeningMatcher matcher)
+        private readonly bool _respectLocks;
+
+        public OpeningPlacer(Document doc, List<ExistingOpening> existing, OpeningMatcher matcher, bool respectLocks)
         {
             _doc = doc;
+            _respectLocks = respectLocks;
             _matcher = matcher;
             _levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
                 .OrderBy(l => l.ProjectElevation).ToList();
@@ -60,10 +63,11 @@ namespace Openings
         public void Place(OpeningPlan plan, FloorHit floor)
         {
             DirectShape ds;
-            if (_matcher.Reuse.TryGetValue(plan, out ExistingOpening existing) && existing.Manual)
+            if (_matcher.Reuse.TryGetValue(plan, out ExistingOpening existing) && existing.Locked && _respectLocks)
             {
-                // Size set by hand (Edit Width): kept as the user left it. Delete it to recalculate.
-                KeptManual++;
+                // Locked (by hand, or edited / changed by the user): a whole-view run leaves it as it is.
+                // A run on selected elements gets past this and updates it.
+                KeptLocked++;
                 Touched.Add(existing.Shape.Id);
                 return;
             }
@@ -83,6 +87,7 @@ namespace Openings
             }
 
             ds.ApplicationDataId = ExistingOpening.KeyOf(plan);
+            if (existing != null && existing.Manual) Set(ds, OpeningParams.Locked, 1);   // the old flag lived in the key
             ds.SetShape(new List<GeometryObject> { solid });
             ds.Name = $"Opening – {(plan.Kind == HostKind.Wall ? "Wall" : "Floor")} – {(plan.Round ? "Round" : "Rectangular")}";
             Touched.Add(ds.Id);
@@ -158,8 +163,13 @@ namespace Openings
 
         // ── Parameters ────────────────────────────────────────────────────────
 
-        private void WriteSize(DirectShape ds, OpeningPlan plan)
+        private void WriteSize(DirectShape ds, OpeningPlan plan) => WriteSize(ds, plan, _missingParams);
+
+        /// <summary>Size, shape and host type parameters (also used by the editor).</summary>
+        internal static void WriteSize(DirectShape ds, OpeningPlan plan, HashSet<string> missing)
         {
+            void Set(Element e, OpeningParam op, object value) => SetParam(e, op, value, missing);
+
             Set(ds, OpeningParams.Depth, plan.Depth);
             Set(ds, OpeningParams.Shape, plan.IsFree ? "Free Shape" : plan.Round ? "Round" : "Rectangular");
 
@@ -225,10 +235,12 @@ namespace Openings
                 string.Join(", ", plan.Members.Select(m => m.Mep.Id.GetValue()).Distinct()));
         }
 
-        private void Set(Element e, OpeningParam op, object value)
+        private void Set(Element e, OpeningParam op, object value) => SetParam(e, op, value, _missingParams);
+
+        internal static void SetParam(Element e, OpeningParam op, object value, HashSet<string> missing)
         {
             Parameter p = e.get_Parameter(op.Guid);
-            if (p == null || p.IsReadOnly) { _missingParams.Add(op.Name); return; }
+            if (p == null || p.IsReadOnly) { missing?.Add(op.Name); return; }
             switch (value)
             {
                 case string s: p.Set(s); break;
@@ -237,7 +249,7 @@ namespace Openings
             }
         }
 
-        private static void Clear(Element e, OpeningParam op)
+        internal static void Clear(Element e, OpeningParam op)
         {
             Parameter p = e.get_Parameter(op.Guid);
             if (p != null && !p.IsReadOnly && p.HasValue) p.ClearValue();
