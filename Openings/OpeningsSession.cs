@@ -19,6 +19,7 @@ namespace Openings
         EditCancel,// drop the sketch
         Section,   // temporary section through a wall opening (the given row, or pick in the model)
         Cleanup,   // palette closed: drop a running sketch and the temporary sections
+        Convert,   // selected openings (or all in the active view) to the representation chosen in the window
         Lock,      // set Opening Lock on the given openings
         Unlock     // clear it; for a deleted opening (negative id) forget the deletion, so a run recreates it
     }
@@ -77,6 +78,7 @@ namespace Openings
             }
             Window.Fill(doc.Title,
                 HostSource.Collect(doc),
+                FamilyCatalog.Collect(doc),
                 OpeningRow.Build(doc),
                 doc.GetUnits().GetFormatOptions(SpecTypeId.Length).GetUnitTypeId(),
                 highlight?.Select(id => id.GetValue()));
@@ -169,7 +171,7 @@ namespace Openings
                 case OpeningsAction.EditApply:
                 {
                     if (_editor == null) { OpeningsSession.Window?.ExitEditMode(); break; }
-                    bool ok = _editor.Apply(doc, out string msg, out bool keepEditing);
+                    bool ok = _editor.Apply(doc, OpeningsSession.Settings, out string msg, out bool keepEditing);
                     if (msg != null) TaskDialog.Show("Openings", msg);
                     if (keepEditing) break;   // the sketch is still there to fix
 
@@ -198,6 +200,13 @@ namespace Openings
                     break;
                 }
 
+                case OpeningsAction.Convert:
+                {
+                    List<ElementId> converted = OpeningConvert.Execute(uidoc, OpeningsSession.Settings);
+                    OpeningsSession.RefreshWindow(app, converted);
+                    break;
+                }
+
                 case OpeningsAction.Cleanup:
                     if (_editor != null) { _editor.Cancel(doc); _editor = null; }
                     OpeningSection.Cleanup(doc, uidoc.ActiveView?.Id);
@@ -213,11 +222,12 @@ namespace Openings
                         t.Start();
                         foreach (ElementId id in Openings(doc, ids))
                         {
-                            DirectShape ds = (DirectShape)doc.GetElement(id);
-                            Parameter p = ds.get_Parameter(OpeningParams.Locked.Guid);
+                            Element el = doc.GetElement(id);
+                            Parameter p = el.get_Parameter(OpeningParams.Locked.Guid);
                             if (p != null && !p.IsReadOnly) p.Set(locking ? 1 : 0);
-                            if (!locking && (ds.ApplicationDataId ?? "").Contains(";manual=1"))
-                                ds.ApplicationDataId = ds.ApplicationDataId.Replace(";manual=1", "");
+                            string key = OpeningElements.GetKey(el) ?? "";
+                            if (!locking && key.Contains(";manual=1"))
+                                OpeningElements.SetKey(el, key.Replace(";manual=1", ""));
                         }
                         if (!locking && ids.Any(i => i < 0))
                         {
@@ -267,13 +277,13 @@ namespace Openings
                 finally { OpeningsSession.Window?.Show(); }
             }
 
-            return ExistingOpening.Collect(doc).FirstOrDefault(o => o.Shape.Id == id);
+            return ExistingOpening.Collect(doc).FirstOrDefault(o => o.Element.Id == id);
         }
 
         /// <summary>The ids that are still openings of this add-in in this document.</summary>
         private static List<ElementId> Openings(Document doc, List<long> ids) =>
             ids.Select(ElementIdExtensions.FromValue)
-               .Where(id => doc.GetElement(id) is DirectShape ds && ds.ApplicationId == OpeningParams.AppId)
+               .Where(id => doc.GetElement(id) is Element e && OpeningElements.IsOpening(e))
                .ToList();
     }
 }

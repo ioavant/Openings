@@ -12,6 +12,7 @@ namespace Openings
         public bool IsLocked { get; set; }
         public bool IsDeleted => ElementId < 0;
         public string Status { get; set; }
+        public string Kind { get; set; }     // DirectShape / Family
         public int? OpeningId { get; set; }
         public string HostType { get; set; }
         public string Shape { get; set; }
@@ -32,7 +33,7 @@ namespace Openings
             Dictionary<long, DeletedOpening> known = new Dictionary<long, DeletedOpening>();
             foreach (ExistingOpening e in ExistingOpening.Collect(doc))
             {
-                DirectShape ds = e.Shape;
+                Element ds = e.Element;
                 string shape = Text(ds, OpeningParams.Shape);
                 string hostType = Text(ds, OpeningParams.HostType);
                 string size = shape == "Round"
@@ -45,6 +46,7 @@ namespace Openings
                     ElementId = ds.Id.GetValue(),
                     IsLocked = e.Locked,
                     Status = e.Pinned ? "Pinned" : null,
+                    Kind = e.Mode == OpeningMode.Family ? "Family" : "DirectShape",
                     OpeningId = Integer(ds, OpeningParams.OpeningId),
                     HostType = hostType,
                     Shape = shape,

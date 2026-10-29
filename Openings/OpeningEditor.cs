@@ -7,11 +7,11 @@ using Autodesk.Revit.UI.Selection;
 
 namespace Openings
 {
-    /// <summary>A wall opening as it stands in the model: its frame and size, read back from the DirectShape.</summary>
+    /// <summary>A wall opening as it stands in the model: its frame and size, read back from the element.</summary>
     public class WallOpening
     {
         public ExistingOpening Existing;
-        public DirectShape Shape => Existing.Shape;
+        public Element Element => Existing.Element;
         public Frame Frame;
         public XYZ Center;
         public bool Round;
@@ -21,7 +21,7 @@ namespace Openings
         /// <summary>Null unless the element is one of this add-in's openings in a wall (not a free shape).</summary>
         public static WallOpening From(ExistingOpening e)
         {
-            DirectShape ds = e.Shape;
+            Element ds = e.Element;
             if (OpeningEditor.Text(ds, OpeningParams.HostType) != "Wall") return null;
             string shape = OpeningEditor.Text(ds, OpeningParams.Shape);
             if (shape != "Rectangular" && shape != "Round") return null;
@@ -40,7 +40,7 @@ namespace Openings
             if (w.Round) { w.Width = w.Height = w.Diameter; }
             if (w.Width <= 0 || w.Height <= 0 || w.Depth <= 0) return null;
 
-            XYZ x = e.XDir ?? XFromGeometry(ds, w.Depth);
+            XYZ x = e.XDir ?? (ds is DirectShape asShape ? XFromGeometry(asShape, w.Depth) : null);
             if (x == null) return null;
             w.Frame = Frame.Horizontal(x);
             return w;
@@ -48,6 +48,7 @@ namespace Openings
 
         public OpeningPlan ToPlan() => new OpeningPlan
         {
+            HostKey = Existing.HostKey,
             Kind = HostKind.Wall,
             Round = Round,
             Center = Center,
@@ -90,7 +91,7 @@ namespace Openings
     public class FloorOpening
     {
         public ExistingOpening Existing;
-        public DirectShape Shape => Existing.Shape;
+        public Element Element => Existing.Element;
         public CurveLoop Profile;     // at the bottom of the opening
         public double BottomZ, Depth;
         public Frame Frame;
@@ -98,10 +99,13 @@ namespace Openings
 
         public static FloorOpening From(ExistingOpening e)
         {
-            DirectShape ds = e.Shape;
+            Element ds = e.Element;
             if (OpeningEditor.Text(ds, OpeningParams.HostType) != "Floor") return null;
-            CurveLoop loop = ShaftProfile.Read(GeometryUtils.GetSolids(ds, null));
             double depth = OpeningEditor.Number(ds, OpeningParams.Depth);
+            Frame frame = Frame.Horizontal(e.XDir ?? XYZ.BasisX);
+            CurveLoop loop = ds is DirectShape shape
+                ? ShaftProfile.Read(GeometryUtils.GetSolids(shape, null))
+                : FamilyProfile(ds, frame, e.Center.Z - depth / 2);
             if (loop == null || depth <= 0) return null;
 
             return new FloorOpening
@@ -110,9 +114,65 @@ namespace Openings
                 Profile = loop,
                 BottomZ = loop.First().GetEndPoint(0).Z,
                 Depth = depth,
-                Frame = Frame.Horizontal(e.XDir ?? XYZ.BasisX),
+                Frame = frame,
                 OpeningId = OpeningEditor.IdOf(ds)
             };
+        }
+
+        /// <summary>A family's rectangle / circle, from its Opening … parameters, at the bottom of the slab.</summary>
+        private static CurveLoop FamilyProfile(Element fi, Frame f, double bottomZ)
+        {
+            XYZ c0 = OpeningElements.CenterOf(fi);
+            XYZ c = new XYZ(c0.X, c0.Y, bottomZ);
+            CurveLoop loop = new CurveLoop();
+            if (OpeningEditor.Text(fi, OpeningParams.Shape) == "Round")
+            {
+                double r = OpeningEditor.Number(fi, OpeningParams.Diameter) / 2;
+                if (r <= 0) return null;
+                loop.Append(Arc.Create(c, r, 0, Math.PI, f.X, f.Y));
+                loop.Append(Arc.Create(c, r, Math.PI, 2 * Math.PI, f.X, f.Y));
+                return loop;
+            }
+            double a = OpeningEditor.Number(fi, OpeningParams.Width) / 2, b = OpeningEditor.Number(fi, OpeningParams.Length) / 2;
+            if (a <= 0 || b <= 0) return null;
+            XYZ p0 = c - a * f.X - b * f.Y, p1 = c + a * f.X - b * f.Y, p2 = c + a * f.X + b * f.Y, p3 = c - a * f.X + b * f.Y;
+            loop.Append(Line.CreateBound(p0, p1));
+            loop.Append(Line.CreateBound(p1, p2));
+            loop.Append(Line.CreateBound(p2, p3));
+            loop.Append(Line.CreateBound(p3, p0));
+            return loop;
+        }
+
+        public OpeningPlan ToPlan() => PlanFrom(Profile);
+
+        /// <summary>
+        /// The opening a closed plan profile at BottomZ makes: rectangle (in its own sides' frame),
+        /// circle, or free shape (bounding size in the opening's frame).
+        /// </summary>
+        public OpeningPlan PlanFrom(CurveLoop loop)
+        {
+            ProfileShape shape = ShaftProfile.Classify(loop, out XYZ side);
+            Frame frame = shape == ProfileShape.Rectangle ? Frame.Horizontal(side) : Frame;
+            LocalBox box = LocalBox.Of(loop.SelectMany(c => c.Tessellate()), frame);
+            OpeningPlan plan = new OpeningPlan
+            {
+                HostKey = Existing.HostKey,
+                Kind = HostKind.Floor,
+                Frame = frame,
+                Center = box.CenterIn(frame),
+                Width = box.MaxX - box.MinX,
+                Height = box.MaxY - box.MinY,
+                Depth = Depth
+            };
+            plan.Center = new XYZ(plan.Center.X, plan.Center.Y, BottomZ + Depth / 2);
+            if (shape == ProfileShape.Circle)
+            {
+                plan.Round = true;
+                plan.Diameter = Math.Max(plan.Width, plan.Height);
+            }
+            else if (shape == ProfileShape.Free)
+                plan.FreeProfile = loop;
+            return plan;
         }
     }
 
@@ -124,8 +184,8 @@ namespace Openings
 
         public bool AllowElement(Element elem)
         {
-            if (!(elem is DirectShape ds) || ds.ApplicationId != OpeningParams.AppId) return false;
-            return !_wallsOnly || OpeningEditor.Text(ds, OpeningParams.HostType) == "Wall";
+            if (!OpeningElements.IsOpening(elem)) return false;
+            return !_wallsOnly || OpeningEditor.Text(elem, OpeningParams.HostType) == "Wall";
         }
 
         public bool AllowReference(Reference reference, XYZ position) => false;
@@ -174,8 +234,8 @@ namespace Openings
                 return null;
             }
 
-            OpeningEditor ed = new OpeningEditor { OpeningElementId = e.Shape.Id.GetValue(), OpeningId = w?.OpeningId ?? f?.OpeningId };
-            string name = ed.OpeningId.HasValue ? "#" + ed.OpeningId : e.Shape.Id.GetValue().ToString();
+            OpeningEditor ed = new OpeningEditor { OpeningElementId = e.Element.Id.GetValue(), OpeningId = w?.OpeningId ?? f?.OpeningId };
+            string name = ed.OpeningId.HasValue ? "#" + ed.OpeningId : e.Element.Id.GetValue().ToString();
 
             if (w != null && view is ViewPlan && !view.IsTemplate)
             {
@@ -270,19 +330,23 @@ namespace Openings
         /// <summary>
         /// API context. Rebuilds the opening from the lines, then removes them. False with a message:
         /// for a sketch that cannot be read the lines stay, so the user can fix it and Apply again
-        /// (<paramref name="keepEditing"/>); otherwise the edit is over.
+        /// (<paramref name="keepEditing"/>); otherwise the edit is over. A family opening edited into a free
+        /// shape becomes a DirectShape (<see cref="OpeningElementId"/> then names the new element).
         /// </summary>
-        public bool Apply(Document doc, out string message, out bool keepEditing)
+        public bool Apply(Document doc, OpeningSettings settings, out string message, out bool keepEditing)
         {
             message = null;
             keepEditing = false;
-            ExistingOpening e = ExistingOpening.Collect(doc).FirstOrDefault(o => o.Shape.Id.GetValue() == OpeningElementId);
+            ExistingOpening e = ExistingOpening.Collect(doc).FirstOrDefault(o => o.Element.Id.GetValue() == OpeningElementId);
             if (e == null) { message = "The opening is no longer in the model."; Cancel(doc); return false; }
 
             try
             {
-                if (_mode == Mode.FloorProfile) ApplyFloor(doc, e);
-                else ApplyWall(doc, e);
+                OpeningWriter writer = new OpeningWriter(doc, settings);
+                Element el = _mode == Mode.FloorProfile ? ApplyFloor(doc, e, writer, out string note) : ApplyWall(doc, e, writer, out note);
+                OpeningElementId = el.Id.GetValue();
+                if (e.Mode == OpeningMode.Family && OpeningElements.ModeOf(el) != OpeningMode.Family)
+                    message = $"The opening is now a Generic Model (DirectShape): {note}.";
                 return true;
             }
             catch (SketchException ex)
@@ -301,7 +365,7 @@ namespace Openings
         private List<Curve> Lines(Document doc) =>
             LineIds.Select(id => doc.GetElement(id)).OfType<ModelCurve>().Select(mc => mc.GeometryCurve).ToList();
 
-        private void ApplyWall(Document doc, ExistingOpening e)
+        private Element ApplyWall(Document doc, ExistingOpening e, OpeningWriter writer, out string note)
         {
             WallOpening w = WallOpening.From(e) ?? throw new SketchException("The opening can no longer be read.");
             List<Line> lines = Lines(doc).OfType<Line>().ToList();
@@ -347,11 +411,9 @@ namespace Openings
             {
                 t.Start();
                 DeleteLines(doc);
-                DirectShape ds = e.Shape;
-                OpeningPlan plan = w.ToPlan();
-                ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(plan) });
+                Element ds = writer.Write(w.ToPlan(), e.Element, e.Mode, out OpeningPlan plan, out note);
                 OpeningPlacer.WriteSize(ds, plan, null);
-                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, x, e.Geo);
+                OpeningElements.SetKey(ds, ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, x, e.Geo));
                 OpeningPlacer.SetParam(ds, OpeningParams.Locked, 1, null);
 
                 Shift(ds, OpeningParams.CenterFromFloor, centerDelta);
@@ -361,10 +423,11 @@ namespace Openings
                 Shift(ds, OpeningParams.BottomElevPbp, bottomDelta);
                 Shift(ds, OpeningParams.BottomElevSp, bottomDelta);
                 t.Commit();
+                return ds;
             }
         }
 
-        private void ApplyFloor(Document doc, ExistingOpening e)
+        private Element ApplyFloor(Document doc, ExistingOpening e, OpeningWriter writer, out string note)
         {
             FloorOpening f = FloorOpening.From(e) ?? throw new SketchException("The opening can no longer be read.");
 
@@ -385,38 +448,17 @@ namespace Openings
                 throw new SketchException("The red lines do not make one closed shape. Fix them (or Cancel) and Apply again.");
             loop = CurveLoop.CreateViaTransform(loop, Transform.CreateTranslation(new XYZ(0, 0, f.BottomZ - _planeZ)));
 
-            ProfileShape shape = ShaftProfile.Classify(loop, out XYZ side);
-            Frame frame = shape == ProfileShape.Rectangle ? Frame.Horizontal(side) : f.Frame;
-            LocalBox box = LocalBox.Of(loop.SelectMany(c => c.Tessellate()), frame);
-            OpeningPlan plan = new OpeningPlan
-            {
-                Kind = HostKind.Floor,
-                Frame = frame,
-                Center = box.CenterIn(frame),
-                Width = box.MaxX - box.MinX,
-                Height = box.MaxY - box.MinY,
-                Depth = f.Depth
-            };
-            plan.Center = new XYZ(plan.Center.X, plan.Center.Y, f.BottomZ + f.Depth / 2);
-            if (shape == ProfileShape.Circle)
-            {
-                plan.Round = true;
-                plan.Diameter = Math.Max(plan.Width, plan.Height);
-            }
-            else if (shape == ProfileShape.Free)
-                plan.FreeProfile = loop;
-
             using (Transaction t = new Transaction(doc, "Openings: apply edit"))
             {
                 t.Start();
                 DeleteLines(doc);
                 if (drawn.Count > 0) doc.Delete(drawn);
-                DirectShape ds = e.Shape;
-                ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(plan) });
+                Element ds = writer.Write(f.PlanFrom(loop), e.Element, e.Mode, out OpeningPlan plan, out note);
                 OpeningPlacer.WriteSize(ds, plan, null);
-                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, frame.X, e.Geo);
+                OpeningElements.SetKey(ds, ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, plan.Frame.X, e.Geo));
                 OpeningPlacer.SetParam(ds, OpeningParams.Locked, 1, null);
                 t.Commit();
+                return ds;
             }
         }
 

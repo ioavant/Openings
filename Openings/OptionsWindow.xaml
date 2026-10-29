@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Openings"
         Title="Openings — Options"
-        Width="660" SizeToContent="Height"
+        Width="820" SizeToContent="Height"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         WindowStartupLocation="CenterOwner"
@@ -82,6 +82,45 @@
                 </GroupBox>
             </StackPanel>
         </Grid>
+
+        <GroupBox Header="Families (when openings are placed as face-based families)">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="100"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="100"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="100"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Rectangular:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Row="0" Grid.Column="1" x:Name="RectFamilyCombo" Margin="0,3"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Width →" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                    <ComboBox Grid.Row="0" Grid.Column="3" x:Name="MapWidthCombo" IsEditable="True" Margin="0,3"/>
+                    <TextBlock Grid.Row="0" Grid.Column="4" Text="Height →" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                    <ComboBox Grid.Row="0" Grid.Column="5" x:Name="MapHeightCombo" IsEditable="True" Margin="0,3"/>
+                    <TextBlock Grid.Row="0" Grid.Column="6" Text="Depth →" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                    <ComboBox Grid.Row="0" Grid.Column="7" x:Name="MapDepthCombo" IsEditable="True" Margin="0,3"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Round:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox Grid.Row="1" Grid.Column="1" x:Name="RoundFamilyCombo" Margin="0,3"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Diameter →" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                    <ComboBox Grid.Row="1" Grid.Column="3" x:Name="MapDiameterCombo" IsEditable="True" Margin="0,3"/>
+                    <TextBlock Grid.Row="1" Grid.Column="6" Text="Depth →" VerticalAlignment="Center" Margin="10,0,4,0"/>
+                    <ComboBox Grid.Row="1" Grid.Column="7" x:Name="MapRoundDepthCombo" IsEditable="True" Margin="0,3"/>
+                </Grid>
+                <TextBlock x:Name="ToleranceLabel" TextWrapping="Wrap"/>
+                <TextBox x:Name="ToleranceTextBox" PreviewTextInput="NumericOnly_PreviewTextInput"/>
+            </StackPanel>
+        </GroupBox>
 
         <TextBlock x:Name="ErrorText" Foreground="Red" FontSize="11" Visibility="Collapsed" TextWrapping="Wrap"/>
         <TextBlock x:Name="FamiliesText" Foreground="#777777" FontSize="11" TextWrapping="Wrap"/>

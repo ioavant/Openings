@@ -35,7 +35,7 @@ namespace Openings
             double halfW = (w.Round ? w.Diameter : w.Width) / 2 + Around;
             double halfH = (w.Round ? w.Diameter : w.Height) / 2;
             double below = halfH + Around;
-            Parameter fromFloor = w.Shape.get_Parameter(OpeningParams.CenterFromFloor.Guid);
+            Parameter fromFloor = w.Element.get_Parameter(OpeningParams.CenterFromFloor.Guid);
             if (fromFloor != null && fromFloor.HasValue)
                 below = Math.Max(below, fromFloor.AsDouble() + 300 / 304.8);   // show the floor the height is measured from
 
@@ -62,12 +62,12 @@ namespace Openings
                 view.ViewTemplateId = ElementId.InvalidElementId;
                 view.Scale = 50;
                 view.DetailLevel = ViewDetailLevel.Fine;
-                view.Name = UniqueName(doc, $"{Prefix} {(w.OpeningId.HasValue ? "#" + w.OpeningId : w.Shape.Id.GetValue().ToString())}");
+                view.Name = UniqueName(doc, $"{Prefix} {(w.OpeningId.HasValue ? "#" + w.OpeningId : w.Element.Id.GetValue().ToString())}");
                 tr.Commit();
             }
 
             uidoc.ActiveView = view;
-            List<ElementId> sel = new List<ElementId> { w.Shape.Id };
+            List<ElementId> sel = new List<ElementId> { w.Element.Id };
             uidoc.Selection.SetElementIds(sel);
         }
 

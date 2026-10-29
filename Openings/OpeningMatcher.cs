@@ -9,12 +9,12 @@ namespace Openings
 {
     /// <summary>
     /// An opening already in the model, with the host and MEP elements it was placed for.
-    /// Those are stored in the DirectShape's ApplicationDataId as "host=&lt;link&gt;:&lt;id&gt;;mep=&lt;id&gt;,&lt;id&gt;"
+    /// Those are stored in the opening's key (<see cref="OpeningElements.GetKey"/>) as "host=&lt;link&gt;:&lt;id&gt;;mep=&lt;id&gt;,&lt;id&gt;"
     /// (HostItem.Key and MEP ElementIds), so a re-run recognises the opening wherever it moved.
     /// </summary>
     public class ExistingOpening
     {
-        public DirectShape Shape;
+        public Element Element;                        // DirectShape or face-based family instance
         public XYZ Center;
         public string HostKey;                         // null: placed before keys were stored
         public HashSet<long> Meps = new HashSet<long>();
@@ -27,14 +27,13 @@ namespace Openings
         public static List<ExistingOpening> Collect(Document doc)
         {
             List<ExistingOpening> list = new List<ExistingOpening>();
-            foreach (DirectShape ds in new FilteredElementCollector(doc).OfClass(typeof(DirectShape)).Cast<DirectShape>())
+            foreach (Element el in OpeningElements.Collect(doc))
             {
-                if (ds.ApplicationId != OpeningParams.AppId) continue;
-                BoundingBoxXYZ bb = ds.get_BoundingBox(null);
-                if (bb == null) continue;
+                XYZ center = OpeningElements.CenterOf(el);
+                if (center == null) continue;
 
-                ExistingOpening e = new ExistingOpening { Shape = ds, Center = (bb.Min + bb.Max) / 2 };
-                foreach (string part in (ds.ApplicationDataId ?? "").Split(';'))
+                ExistingOpening e = new ExistingOpening { Element = el, Center = center };
+                foreach (string part in (OpeningElements.GetKey(el) ?? "").Split(';'))
                 {
                     if (part.StartsWith("host=")) e.HostKey = part.Substring(5);
                     else if (part.StartsWith("mep="))
@@ -54,13 +53,16 @@ namespace Openings
                     else if (part.StartsWith("geo=")) e.Geo = part.Substring(4);
                 }
                 if (e.HostKey != null && e.Meps.Count == 0) e.HostKey = null;
-                Parameter lp = ds.get_Parameter(OpeningParams.Locked.Guid);
+                if (e.XDir == null && el is FamilyInstance fi) e.XDir = fi.HandOrientation;
+                Parameter lp = el.get_Parameter(OpeningParams.Locked.Guid);
                 e.Locked = e.Manual || (lp != null && lp.HasValue && lp.AsInteger() == 1);
-                e.Pinned = ds.Pinned;
+                e.Pinned = el.Pinned;
                 list.Add(e);
             }
             return list;
         }
+
+        public OpeningMode Mode => OpeningElements.ModeOf(Element);
 
         public static string KeyOf(OpeningPlan plan, string geo) =>
             KeyOf(plan.HostKey, plan.MepIds, plan.Frame.X, geo);

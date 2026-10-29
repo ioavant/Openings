@@ -22,6 +22,8 @@ namespace Openings
         private readonly Dictionary<long, string> _sourceTitles = new Dictionary<long, string>();
         private ForgeTypeId _lengthUnit;
         private string _sourcesSignature;
+        private List<FamilyChoice> _families = new List<FamilyChoice>();
+        private TextBlock _convertSubtitle;
 
         public OpeningsWindow(OpeningSettings settings)
         {
@@ -44,11 +46,23 @@ namespace Openings
                 "Wall opening: temporary\nsection through it", null, () => OneOrPick(OpeningsAction.Section)));
             ButtonRow.Children.Add(MakeActionButton("Delete",
                 "Remove the chosen\nopenings from the model", null, DeleteRows));
+            Button convert = MakeActionButton("Convert", "", null, Convert);
+            _convertSubtitle = ((StackPanel)convert.Content).Children.OfType<TextBlock>().Last();
+            ButtonRow.Children.Add(convert);
             ButtonRow.Children.Add(MakeActionButton("Options…",
                 "Categories, size, merging,\nfloor search", null, ShowOptions));
 
             EditApplyButton.Click += (s, e) => OpeningsSession.Raise(OpeningsAction.EditApply);
             EditCancelButton.Click += (s, e) => OpeningsSession.Raise(OpeningsAction.EditCancel);
+
+            ModeCombo.SelectedIndex = settings.Mode == OpeningMode.Family ? 1 : 0;
+            ModeCombo.SelectionChanged += (s, e) =>
+            {
+                _settings.Mode = ModeCombo.SelectedIndex == 1 ? OpeningMode.Family : OpeningMode.DirectShape;
+                _settings.Save();
+                UpdateConvertText();
+            };
+            UpdateConvertText();
 
             OpeningsGrid.MouseDoubleClick += (s, e) => { if (OpeningsGrid.SelectedItem != null) SelectRows(); };
 
@@ -58,10 +72,11 @@ namespace Openings
 
         // ── Filled from the API context ───────────────────────────────────────
 
-        public void Fill(string docTitle, List<HostSource> sources, List<OpeningRow> rows,
+        public void Fill(string docTitle, List<HostSource> sources, List<FamilyChoice> families, List<OpeningRow> rows,
                          ForgeTypeId lengthUnit, IEnumerable<long> highlight)
         {
             _lengthUnit = lengthUnit;
+            _families = families;
             IsEnabled = true;
 
             // Links: rebuilt only when they changed, so a refresh on activation never resets ticks
@@ -109,13 +124,13 @@ namespace Openings
         {
             EditText.Text = text;
             EditBanner.Visibility = System.Windows.Visibility.Visible;
-            ButtonRow.IsEnabled = OpeningsGrid.IsEnabled = SourcesDrop.IsEnabled = false;
+            ButtonRow.IsEnabled = OpeningsGrid.IsEnabled = SourcesDrop.IsEnabled = ModeCombo.IsEnabled = false;
         }
 
         public void ExitEditMode()
         {
             EditBanner.Visibility = System.Windows.Visibility.Collapsed;
-            ButtonRow.IsEnabled = OpeningsGrid.IsEnabled = SourcesDrop.IsEnabled = true;
+            ButtonRow.IsEnabled = OpeningsGrid.IsEnabled = SourcesDrop.IsEnabled = ModeCombo.IsEnabled = true;
         }
 
         // ── Actions ───────────────────────────────────────────────────────────
@@ -161,6 +176,22 @@ namespace Openings
             OpeningsSession.Raise(OpeningsAction.Place, keys);
         }
 
+        private void UpdateConvertText() =>
+            _convertSubtitle.Text = "Selected / all in view\n→ " +
+                                    (_settings.Mode == OpeningMode.Family ? "families" : "Generic Models");
+
+        /// <summary>Openings selected in Revit, or all visible in the active view, to the chosen representation.</summary>
+        private void Convert()
+        {
+            string to = _settings.Mode == OpeningMode.Family ? "face-based families" : "Generic Models (DirectShape)";
+            if (MessageBox.Show(this,
+                    $"Convert the openings selected in Revit — or, with none selected, all openings visible in the active view — to {to}?\n\n" +
+                    "Converted openings become new elements (tags on them are lost); ID, Lock and parameters are kept.",
+                    "Openings", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+            OpeningsSession.Raise(OpeningsAction.Convert);
+        }
+
         private void SelectRows()
         {
             List<long> ids = SelectedIds();
@@ -192,7 +223,7 @@ namespace Openings
         private void ShowOptions()
         {
             if (_lengthUnit == null) return;
-            OptionsWindow dlg = new OptionsWindow(_settings, _lengthUnit) { Owner = this };
+            OptionsWindow dlg = new OptionsWindow(_settings, _lengthUnit, _families) { Owner = this };
             if (dlg.ShowDialog() == true) _settings.Save();
         }
 

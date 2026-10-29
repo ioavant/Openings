@@ -38,6 +38,25 @@ namespace Openings
         /// <summary>How far past each wall face (along the duct) the floor is probed from.</summary>
         public double FloorProbeOffset { get; set; } = 300 * MmToFeet;
 
+        // ── Representation ────────────────────────────────────────────────────
+
+        /// <summary>What new openings are placed as, and what Convert turns openings into.</summary>
+        public OpeningMode Mode { get; set; } = OpeningMode.DirectShape;
+
+        /// <summary>Face-based family types ("Family : Type") for rectangular and round openings.</summary>
+        public string RectFamily { get; set; } = "";
+        public string RoundFamily { get; set; } = "";
+
+        // Family instance parameters the sizes go to (empty: not set).
+        public string MapWidth { get; set; } = "Width";
+        public string MapHeight { get; set; } = "Height";
+        public string MapDepth { get; set; } = "Depth";
+        public string MapDiameter { get; set; } = "Diameter";
+        public string MapRoundDepth { get; set; } = "Depth";
+
+        /// <summary>A free shape this close to its bounding rectangle / circle is placed as that family.</summary>
+        public double FamilyTolerance { get; set; } = 20 * MmToFeet;
+
         // ── Persistence ───────────────────────────────────────────────────────
 
         private static string SettingsPath => Path.Combine(

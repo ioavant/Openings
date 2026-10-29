@@ -126,7 +126,9 @@ namespace Openings
 
             // Optional: a project opened on a machine without the add-in raises no warning.
             UpdaterRegistry.RegisterUpdater(u, true);
-            ElementClassFilter filter = new ElementClassFilter(typeof(DirectShape));
+            // DirectShape openings and family ones; Execute picks out this add-in's.
+            ElementFilter filter = new LogicalOrFilter(new ElementClassFilter(typeof(DirectShape)),
+                                                       new ElementClassFilter(typeof(FamilyInstance)));
             UpdaterRegistry.AddTrigger(_id, filter, Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(_id, filter, Element.GetChangeTypeElementDeletion());
         }
@@ -149,8 +151,9 @@ namespace Openings
 
             foreach (ElementId id in data.GetModifiedElementIds())
             {
-                if (!(doc.GetElement(id) is DirectShape ds) || ds.ApplicationId != OpeningParams.AppId) continue;
-                Parameter p = ds.get_Parameter(OpeningParams.Locked.Guid);
+                Element el = doc.GetElement(id);
+                if (el == null || !OpeningElements.IsOpening(el)) continue;
+                Parameter p = el.get_Parameter(OpeningParams.Locked.Guid);
                 if (p != null && !p.IsReadOnly && p.AsInteger() != 1) p.Set(1);
             }
 

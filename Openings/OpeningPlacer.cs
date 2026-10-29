@@ -6,9 +6,10 @@ using Autodesk.Revit.DB;
 namespace Openings
 {
     /// <summary>
-    /// Writes openings as Generic Model DirectShapes (as ShaftMaster does with shafts):
-    /// the solid is built straight in model coordinates, already oriented to the host,
-    /// so there is no family, no level offset and no rotation to get right.
+    /// Writes the openings of a run: which existing opening each plan updates (or keeps, when locked /
+    /// pinned), its geometry through <see cref="OpeningWriter"/> — a Generic Model DirectShape built
+    /// straight in model coordinates (as ShaftMaster does with shafts), or a face-based family — and
+    /// its parameters.
     /// </summary>
     public class OpeningPlacer
     {
@@ -36,21 +37,30 @@ namespace Openings
         public IEnumerable<string> MissingParams => _missingParams;
 
         private readonly bool _respectLocks;
+        private readonly OpeningWriter _writer;
+        private readonly OpeningMode _mode;
 
-        public OpeningPlacer(Document doc, List<ExistingOpening> existing, OpeningMatcher matcher, bool respectLocks)
+        /// <summary>Openings asked for as a family that became DirectShapes, and why.</summary>
+        public int NotFamily { get; private set; }
+        public List<string> Notes { get; } = new List<string>();
+
+        public OpeningPlacer(Document doc, List<ExistingOpening> existing, OpeningMatcher matcher, bool respectLocks,
+                             OpeningWriter writer, OpeningMode mode)
         {
             _doc = doc;
+            _writer = writer;
+            _mode = mode;
             _respectLocks = respectLocks;
             _matcher = matcher;
             _levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
                 .OrderBy(l => l.ProjectElevation).ToList();
 
-            foreach (ExistingOpening e in existing.OrderBy(e => e.Shape.Id.GetValue()))
+            foreach (ExistingOpening e in existing.OrderBy(e => e.Element.Id.GetValue()))
             {
-                Parameter p = e.Shape.get_Parameter(OpeningParams.OpeningId.Guid);
+                Parameter p = e.Element.get_Parameter(OpeningParams.OpeningId.Guid);
                 if (p == null || !p.HasValue) continue;
                 int id = p.AsInteger();
-                if (!_idOwners.ContainsKey(id)) _idOwners[id] = e.Shape.Id;
+                if (!_idOwners.ContainsKey(id)) _idOwners[id] = e.Element.Id;
                 _nextId = Math.Max(_nextId, id + 1);
             }
 
@@ -64,13 +74,12 @@ namespace Openings
         /// <summary>Inside a transaction.</summary>
         public void Place(OpeningPlan plan, FloorHit floor)
         {
-            DirectShape ds;
             _matcher.Reuse.TryGetValue(plan, out ExistingOpening existing);
             if (existing != null && existing.Pinned)
             {
                 // Pinned in Revit: no run moves or resizes it, whatever its MEP elements did.
                 KeptPinned++;
-                Touched.Add(existing.Shape.Id);
+                Touched.Add(existing.Element.Id);
                 return;
             }
             if (existing != null && existing.Locked && _respectLocks)
@@ -81,36 +90,38 @@ namespace Openings
                 if (!existing.MepMoved(_doc, plan.MepIds))
                 {
                     KeptLocked++;
-                    Touched.Add(existing.Shape.Id);
+                    Touched.Add(existing.Element.Id);
                     return;
                 }
                 LockedButMoved++;
             }
 
-            Solid solid = BuildSolid(plan);
+            // An existing opening stays what it is (Convert changes that); a new one is what the window says.
+            OpeningMode want = existing?.Mode ?? _mode;
+            Element el = _writer.Write(plan, existing?.Element, want, out OpeningPlan used, out string note);
+            if (want == OpeningMode.Family && OpeningElements.ModeOf(el) != want)
+            {
+                NotFamily++;
+                if (note != null) Notes.Add($"Opening at MEP {plan.MepIds.FirstOrDefault()}: DirectShape — {note}");
+            }
             if (existing != null)
             {
-                // Same ElementId, so tags survive.
-                ds = existing.Shape;
+                // Same ElementId where possible, so tags survive; a replacement keeps the Opening ID.
                 Updated++;
+                if (el.Id != existing.Element.Id)
+                    foreach (int id in _idOwners.Where(kv => kv.Value == existing.Element.Id).Select(kv => kv.Key).ToList())
+                        _idOwners[id] = el.Id;
             }
-            else
-            {
-                ds = DirectShape.CreateElement(_doc, new ElementId(BuiltInCategory.OST_GenericModel));
-                ds.ApplicationId = OpeningParams.AppId;
-                Created++;
-            }
+            else Created++;
 
-            ds.ApplicationDataId = ExistingOpening.KeyOf(plan, MepFingerprint.Of(_doc, plan.MepIds));
-            if (existing != null && existing.Manual) Set(ds, OpeningParams.Locked, 1);   // the old flag lived in the key
-            ds.SetShape(new List<GeometryObject> { solid });
-            ds.Name = $"Opening – {(plan.Kind == HostKind.Wall ? "Wall" : "Floor")} – {(plan.Round ? "Round" : "Rectangular")}";
-            Touched.Add(ds.Id);
+            OpeningElements.SetKey(el, ExistingOpening.KeyOf(used, MepFingerprint.Of(_doc, plan.MepIds)));
+            if (existing != null && existing.Manual) Set(el, OpeningParams.Locked, 1);   // the old flag lived in the key
+            Touched.Add(el.Id);
 
-            WriteOpeningId(ds);
-            WriteSize(ds, plan);
-            WriteElevations(ds, plan, floor);
-            WriteInfo(ds, plan);
+            WriteOpeningId(el);
+            WriteSize(el, used);
+            WriteElevations(el, used, floor);
+            WriteInfo(el, used);
         }
 
         /// <summary>Inside a transaction, after every Place: removes openings the matcher found superseded or stale.</summary>
@@ -118,13 +129,13 @@ namespace Openings
         {
             foreach (ExistingOpening e in _matcher.Obsolete)
             {
-                if (!e.Shape.IsValidObject) continue;
-                _doc.Delete(e.Shape.Id);
+                if (!e.Element.IsValidObject) continue;
+                _doc.Delete(e.Element.Id);
                 Deleted++;
             }
         }
 
-        private void WriteOpeningId(DirectShape ds)
+        private void WriteOpeningId(Element ds)
         {
             Parameter p = ds.get_Parameter(OpeningParams.OpeningId.Guid);
             if (p != null && p.HasValue && _idOwners.TryGetValue(p.AsInteger(), out ElementId owner) && owner == ds.Id)
@@ -178,10 +189,10 @@ namespace Openings
 
         // ── Parameters ────────────────────────────────────────────────────────
 
-        private void WriteSize(DirectShape ds, OpeningPlan plan) => WriteSize(ds, plan, _missingParams);
+        private void WriteSize(Element ds, OpeningPlan plan) => WriteSize(ds, plan, _missingParams);
 
-        /// <summary>Size, shape and host type parameters (also used by the editor).</summary>
-        internal static void WriteSize(DirectShape ds, OpeningPlan plan, HashSet<string> missing)
+        /// <summary>Size, shape and host type parameters (also used by the editor and Convert).</summary>
+        internal static void WriteSize(Element ds, OpeningPlan plan, HashSet<string> missing)
         {
             void Set(Element e, OpeningParam op, object value) => SetParam(e, op, value, missing);
 
@@ -214,7 +225,7 @@ namespace Openings
             }
         }
 
-        private void WriteElevations(DirectShape ds, OpeningPlan plan, FloorHit floor)
+        private void WriteElevations(Element ds, OpeningPlan plan, FloorHit floor)
         {
             double bottom = plan.BottomZ;
             double center = plan.Center.Z;
@@ -242,7 +253,7 @@ namespace Openings
             }
         }
 
-        private void WriteInfo(DirectShape ds, OpeningPlan plan)
+        private void WriteInfo(Element ds, OpeningPlan plan)
         {
             Set(ds, OpeningParams.HostInfo,
                 string.Join("; ", plan.Members.Select(m => m.Host.Describe()).Distinct()));

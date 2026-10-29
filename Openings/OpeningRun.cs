@@ -10,7 +10,8 @@ namespace Openings
 {
     /// <summary>
     /// One "Place openings" run: finds where ducts/pipes/... cross walls and floors of the chosen
-    /// models and places, updates or deletes Generic Model DirectShape openings. Runs in an API
+    /// models and places, updates or deletes openings (Generic Model DirectShapes or face-based
+    /// families, <see cref="OpeningSettings.Mode"/>). Runs in an API
     /// context (the window's external event) and reports with a TaskDialog.
     /// </summary>
     public static class OpeningRun
@@ -41,6 +42,13 @@ namespace Openings
             if (sources.Count == 0)
             {
                 TaskDialog.Show("Openings", "Tick at least one model with walls / floors.");
+                return none;
+            }
+
+            OpeningWriter writer = new OpeningWriter(doc, settings);
+            if (settings.Mode == OpeningMode.Family && writer.FamilyProblem != null)
+            {
+                TaskDialog.Show("Openings", writer.FamilyProblem);
                 return none;
             }
 
@@ -100,7 +108,7 @@ namespace Openings
             SharedParamHelper.EnsureParameters(doc);
 
             // ── Place ─────────────────────────────────────────────────────────
-            OpeningPlacer placer = new OpeningPlacer(doc, existing, matcher, !selectedRun);
+            OpeningPlacer placer = new OpeningPlacer(doc, existing, matcher, !selectedRun, writer, settings.Mode);
             int skipped = 0;
             using (new OwnChanges())
             using (Transaction t = new Transaction(doc, "Place openings"))
@@ -122,6 +130,7 @@ namespace Openings
                     }
                 }
                 placer.DeleteObsolete();
+                warnings.AddRange(placer.Notes);
                 if (revived.Count > 0)
                     DeletedOpenings.Write(doc, deleted.Except(revived).ToList());
                 t.Commit();
@@ -145,6 +154,10 @@ namespace Openings
                 sb.AppendLine($"Recreated after a manual delete: {revived.Count}");
             if (placer.NoFloorFound > 0)
                 sb.AppendLine($"Wall openings with no floor found below: {placer.NoFloorFound}");
+            if (placer.NotFamily > 0)
+                sb.AppendLine($"Placed as DirectShape instead of a family: {placer.NotFamily} (free shapes, or no host face — see details)");
+            if (writer.MissingFamilyParams.Any())
+                sb.AppendLine("Family parameters not found (check the mapping in Options): " + string.Join(", ", writer.MissingFamilyParams));
             if (placer.MissingParams.Any())
                 sb.AppendLine("Shared parameters not available: " + string.Join(", ", placer.MissingParams));
             sb.AppendLine($"Time: {sw.Elapsed.TotalSeconds:0.0} s");
@@ -216,8 +229,7 @@ namespace Openings
             return meps;
         }
 
-        private static bool IsOpening(Element e) =>
-            e is DirectShape ds && ds.ApplicationId == OpeningParams.AppId;
+        private static bool IsOpening(Element e) => OpeningElements.IsOpening(e);
 
         private static List<BuiltInCategory> ToCategories(IEnumerable<string> names)
         {

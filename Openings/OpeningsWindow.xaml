@@ -25,6 +25,13 @@
             <TextBlock Text="Walls / floors from:" FontWeight="SemiBold" FontSize="12"
                        VerticalAlignment="Center" Margin="0,0,8,0"/>
             <local:CheckDropDown x:Name="SourcesDrop" Width="380"/>
+            <TextBlock Text="Openings as:" FontWeight="SemiBold" FontSize="12"
+                       VerticalAlignment="Center" Margin="24,0,8,0"/>
+            <ComboBox x:Name="ModeCombo" Width="230" VerticalAlignment="Center"
+                      ToolTip="What new openings are placed as, and what Convert turns openings into. A family takes rectangles and circles only; free shapes stay Generic Models.">
+                <ComboBoxItem Content="Generic Model (DirectShape)"/>
+                <ComboBoxItem Content="Family (face-based)"/>
+            </ComboBox>
         </StackPanel>
 
         <TextBlock Grid.Row="1" x:Name="ListLabel" Text="Openings" FontWeight="SemiBold" FontSize="12" Margin="0,12,0,4"/>
@@ -47,6 +54,7 @@
                 </DataGridTemplateColumn>
                 <DataGridTextColumn Header="ID" Binding="{Binding OpeningId}" Width="50"/>
                 <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="60"/>
+                <DataGridTextColumn Header="Type" Binding="{Binding Kind}" Width="75"/>
                 <DataGridTextColumn Header="Host" Binding="{Binding HostType}" Width="55"/>
                 <DataGridTextColumn Header="Shape" Binding="{Binding Shape}" Width="85"/>
                 <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="110"/>
@@ -72,6 +80,6 @@
             </DockPanel>
         </Border>
 
-        <UniformGrid Grid.Row="5" x:Name="ButtonRow" Columns="6" Rows="1" Margin="0,10,0,0"/>
+        <UniformGrid Grid.Row="5" x:Name="ButtonRow" Columns="7" Rows="1" Margin="0,10,0,0"/>
     </Grid>
 </Window>

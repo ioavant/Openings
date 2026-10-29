@@ -23,8 +23,15 @@ namespace Openings
         public CurveLoop FreeProfile;
         public bool IsFree => FreeProfile != null;
 
-        /// <summary>All members share one host (plans are built per host).</summary>
-        public string HostKey => Members[0].Host.Key;
+        /// <summary>All members share one host (plans are built per host). Set for a plan read back from the model.</summary>
+        public string HostKey
+        {
+            get => _hostKey ?? (Members.Count > 0 ? Members[0].Host.Key : null);
+            set => _hostKey = value;
+        }
+        private string _hostKey;
+
+        public OpeningPlan Clone() => (OpeningPlan)MemberwiseClone();
         public List<long> MepIds => Members.Select(m => m.Mep.Id.GetValue()).Distinct().ToList();
 
         public double BottomZ => Kind == HostKind.Wall
