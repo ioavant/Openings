@@ -30,6 +30,8 @@ namespace Openings
         public int Deleted { get; private set; }
         public int NoFloorFound { get; private set; }
         public int KeptLocked { get; private set; }
+        public int KeptPinned { get; private set; }
+        public int LockedButMoved { get; private set; }
         public List<ElementId> Touched { get; } = new List<ElementId>();
         public IEnumerable<string> MissingParams => _missingParams;
 
@@ -63,13 +65,26 @@ namespace Openings
         public void Place(OpeningPlan plan, FloorHit floor)
         {
             DirectShape ds;
-            if (_matcher.Reuse.TryGetValue(plan, out ExistingOpening existing) && existing.Locked && _respectLocks)
+            _matcher.Reuse.TryGetValue(plan, out ExistingOpening existing);
+            if (existing != null && existing.Pinned)
             {
-                // Locked (by hand, or edited / changed by the user): a whole-view run leaves it as it is.
-                // A run on selected elements gets past this and updates it.
-                KeptLocked++;
+                // Pinned in Revit: no run moves or resizes it, whatever its MEP elements did.
+                KeptPinned++;
                 Touched.Add(existing.Shape.Id);
                 return;
+            }
+            if (existing != null && existing.Locked && _respectLocks)
+            {
+                // Locked (by hand, or edited / changed by the user): a whole-view run leaves it as it is —
+                // unless its MEP elements moved since it was placed; then it follows them like any other.
+                // A run on selected elements always gets past this and updates it.
+                if (!existing.MepMoved(_doc, plan.MepIds))
+                {
+                    KeptLocked++;
+                    Touched.Add(existing.Shape.Id);
+                    return;
+                }
+                LockedButMoved++;
             }
 
             Solid solid = BuildSolid(plan);
@@ -86,7 +101,7 @@ namespace Openings
                 Created++;
             }
 
-            ds.ApplicationDataId = ExistingOpening.KeyOf(plan);
+            ds.ApplicationDataId = ExistingOpening.KeyOf(plan, MepFingerprint.Of(_doc, plan.MepIds));
             if (existing != null && existing.Manual) Set(ds, OpeningParams.Locked, 1);   // the old flag lived in the key
             ds.SetShape(new List<GeometryObject> { solid });
             ds.Name = $"Opening – {(plan.Kind == HostKind.Wall ? "Wall" : "Floor")} – {(plan.Round ? "Round" : "Rectangular")}";

@@ -351,7 +351,7 @@ namespace Openings
                 OpeningPlan plan = w.ToPlan();
                 ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(plan) });
                 OpeningPlacer.WriteSize(ds, plan, null);
-                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, x, false);
+                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, x, e.Geo);
                 OpeningPlacer.SetParam(ds, OpeningParams.Locked, 1, null);
 
                 Shift(ds, OpeningParams.CenterFromFloor, centerDelta);
@@ -414,7 +414,7 @@ namespace Openings
                 DirectShape ds = e.Shape;
                 ds.SetShape(new List<GeometryObject> { OpeningPlacer.BuildSolid(plan) });
                 OpeningPlacer.WriteSize(ds, plan, null);
-                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, frame.X, false);
+                ds.ApplicationDataId = ExistingOpening.KeyOf(e.HostKey ?? "", e.Meps, frame.X, e.Geo);
                 OpeningPlacer.SetParam(ds, OpeningParams.Locked, 1, null);
                 t.Commit();
             }

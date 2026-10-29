@@ -69,7 +69,7 @@ namespace Openings
             // deleted ones back.
             bool selectedRun = scope == "Selected";
             OpeningMatcher matcher = new OpeningMatcher(existing, plans,
-                new HashSet<long>(meps.Select(m => m.Id.GetValue())), finder.CheckedHosts, !selectedRun);
+                new HashSet<long>(meps.Select(m => m.Id.GetValue())), finder.CheckedHosts, !selectedRun, doc);
 
             List<DeletedOpening> deleted = DeletedOpenings.Read(doc);
             List<DeletedOpening> revived = new List<DeletedOpening>();
@@ -79,7 +79,10 @@ namespace Openings
                 if (matcher.Reuse.ContainsKey(plan)) continue;
                 List<DeletedOpening> hit = deleted.Where(d => d.Covers(plan)).ToList();
                 if (hit.Count == 0) continue;
-                if (selectedRun) revived.AddRange(hit);
+                // The user's deletion holds while its MEP elements stay where they were; once they move,
+                // the opening follows them like any other (as a locked one does).
+                if (selectedRun || hit.All(d => d.Geo != null && MepFingerprint.Of(doc, d.Meps) != d.Geo))
+                    revived.AddRange(hit);
                 else { plans.Remove(plan); suppressed++; }
             }
 
@@ -130,6 +133,10 @@ namespace Openings
             sb.AppendLine($"Crossings found: {penetrations.Count}");
             sb.AppendLine($"Openings: {plans.Count} ({plans.Count(p => p.Round)} round, {planner.MergedGroups} merged)");
             sb.AppendLine($"Created: {placer.Created}, updated: {placer.Updated}, deleted: {placer.Deleted}, skipped: {skipped}");
+            if (placer.LockedButMoved > 0)
+                sb.AppendLine($"Locked, but their MEP elements moved — updated: {placer.LockedButMoved}");
+            if (placer.KeptPinned > 0)
+                sb.AppendLine($"Pinned, left as they are: {placer.KeptPinned}");
             if (placer.KeptLocked > 0)
                 sb.AppendLine($"Locked, left as they are: {placer.KeptLocked} (run on selected elements, or unlock, to update)");
             if (suppressed > 0)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using System.Linq;
 using Autodesk.Revit.DB;
 
@@ -20,6 +21,8 @@ namespace Openings
         public XYZ XDir;                               // opening's X (along the wall); null on older openings
         public bool Manual;                            // older "edited by hand" flag in the key; counts as locked
         public bool Locked;                            // Opening Lock: a whole-view run leaves it alone
+        public bool Pinned;                            // pinned in Revit: no run touches it
+        public string Geo;                             // MepFingerprint of its MEP elements when last placed; null on older openings
 
         public static List<ExistingOpening> Collect(Document doc)
         {
@@ -48,24 +51,36 @@ namespace Openings
                             e.XDir = new XYZ(dx, dy, 0);
                     }
                     else if (part == "manual=1") e.Manual = true;
+                    else if (part.StartsWith("geo=")) e.Geo = part.Substring(4);
                 }
                 if (e.HostKey != null && e.Meps.Count == 0) e.HostKey = null;
                 Parameter lp = ds.get_Parameter(OpeningParams.Locked.Guid);
                 e.Locked = e.Manual || (lp != null && lp.HasValue && lp.AsInteger() == 1);
+                e.Pinned = ds.Pinned;
                 list.Add(e);
             }
             return list;
         }
 
-        public static string KeyOf(OpeningPlan plan) =>
-            KeyOf(plan.HostKey, plan.MepIds, plan.Frame.X, false);
+        public static string KeyOf(OpeningPlan plan, string geo) =>
+            KeyOf(plan.HostKey, plan.MepIds, plan.Frame.X, geo);
 
-        /// <summary>"host=…;mep=…;x=dx,dy[;manual=1]" — x is the opening's horizontal X, for editing later.</summary>
-        public static string KeyOf(string hostKey, IEnumerable<long> meps, XYZ xDir, bool manual) =>
+        /// <summary>
+        /// "host=…;mep=…;x=dx,dy;geo=…" — x is the opening's horizontal X (for editing later), geo where
+        /// its MEP elements were when it was placed (<see cref="MepFingerprint"/>).
+        /// </summary>
+        public static string KeyOf(string hostKey, IEnumerable<long> meps, XYZ xDir, string geo) =>
             "host=" + hostKey + ";mep=" + string.Join(",", meps.OrderBy(id => id)) +
             (xDir == null ? "" : ";x=" + xDir.X.ToString("R", CultureInfo.InvariantCulture) + "," +
                                          xDir.Y.ToString("R", CultureInfo.InvariantCulture)) +
-            (manual ? ";manual=1" : "");
+            (string.IsNullOrEmpty(geo) ? "" : ";geo=" + geo);
+
+        /// <summary>
+        /// Its MEP elements moved (or were resized, or the set changed) since the opening was placed.
+        /// False when that is unknown (an opening from before the fingerprint was stored).
+        /// </summary>
+        public bool MepMoved(Document doc, IEnumerable<long> mepsNow) =>
+            Geo != null && MepFingerprint.Of(doc, mepsNow) != Geo;
     }
 
     /// <summary>
@@ -87,7 +102,7 @@ namespace Openings
 
         /// <param name="respectLocks">Whole-view run: locked openings are neither updated (see OpeningPlacer) nor deleted.</param>
         public OpeningMatcher(List<ExistingOpening> existing, List<OpeningPlan> plans,
-                              ISet<long> checkedMeps, ISet<string> checkedHosts, bool respectLocks)
+                              ISet<long> checkedMeps, ISet<string> checkedHosts, bool respectLocks, Document doc)
         {
             var candidates = new List<(OpeningPlan plan, ExistingOpening e, int overlap, double dist)>();
             foreach (OpeningPlan plan in plans)
@@ -124,11 +139,45 @@ namespace Openings
             foreach (ExistingOpening e in existing)
             {
                 if (taken.Contains(e) || e.HostKey == null) continue;
-                if (respectLocks && e.Locked) continue;
+                // Pinned: never deleted by a run. Locked: kept by a whole-view run — unless its MEP elements
+                // moved, then it follows them like any other opening (here: it no longer crosses, so it goes).
+                if (e.Pinned) continue;
+                if (respectLocks && e.Locked && !e.MepMoved(doc, e.Meps)) continue;
                 bool noLongerCrosses = checkedHosts.Contains(e.HostKey) && e.Meps.All(checkedMeps.Contains);
                 if (superseded.Contains(e) || noLongerCrosses)
                     Obsolete.Add(e);
             }
+        }
+    }
+
+    /// <summary>
+    /// Where a set of MEP elements is: each one's bounding box rounded to 1 mm, hashed (FNV-1a, 64 bit —
+    /// string.GetHashCode is randomised per process on .NET 8). Moving, resizing or rerouting an element
+    /// changes it; a deleted element counts as "missing".
+    /// </summary>
+    public static class MepFingerprint
+    {
+        public static string Of(Document doc, IEnumerable<long> meps)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (long id in meps.Distinct().OrderBy(i => i))
+            {
+                sb.Append(id).Append(':');
+                BoundingBoxXYZ bb = doc.GetElement(ElementIdExtensions.FromValue(id))?.get_BoundingBox(null);
+                if (bb == null) sb.Append("missing");
+                else
+                    foreach (double v in new[] { bb.Min.X, bb.Min.Y, bb.Min.Z, bb.Max.X, bb.Max.Y, bb.Max.Z })
+                        sb.Append(Math.Round(v * 304.8).ToString(CultureInfo.InvariantCulture)).Append(',');
+                sb.Append(';');
+            }
+
+            ulong hash = 14695981039346656037UL;
+            foreach (char c in sb.ToString())
+            {
+                hash ^= c;
+                hash *= 1099511628211UL;
+            }
+            return hash.ToString("x16");
         }
     }
 }

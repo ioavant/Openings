@@ -13,6 +13,7 @@ namespace Openings
         public HashSet<long> Meps = new HashSet<long>();
         public int? OpeningId;
         public string HostType, Shape, Size, Level, Host, Mep;
+        public string Geo;   // MepFingerprint at deletion; null if unknown
 
         /// <summary>The row id the palette uses for it: negative, so it never collides with an ElementId.</summary>
         public long RowId => -1 - (OpeningId ?? (Math.Abs((long)(HostKey + "|" + string.Join(",", Meps)).GetHashCode()) % 1000000000));
@@ -24,7 +25,7 @@ namespace Openings
 
         public string Serialize() => string.Join(Sep.ToString(),
             HostKey ?? "", string.Join(",", Meps), OpeningId?.ToString() ?? "",
-            HostType ?? "", Shape ?? "", Size ?? "", Level ?? "", Host ?? "", Mep ?? "");
+            HostType ?? "", Shape ?? "", Size ?? "", Level ?? "", Host ?? "", Mep ?? "", Geo ?? "");
 
         public static DeletedOpening Parse(string s)
         {
@@ -37,6 +38,7 @@ namespace Openings
             foreach (string id in f[1].Split(','))
                 if (long.TryParse(id, out long v)) d.Meps.Add(v);
             if (int.TryParse(f[2], out int oid)) d.OpeningId = oid;
+            if (f.Length > 9 && f[9].Length > 0) d.Geo = f[9];
             return d.HostKey.Length > 0 && d.Meps.Count > 0 ? d : null;
         }
     }

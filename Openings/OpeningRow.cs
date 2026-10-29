@@ -44,6 +44,7 @@ namespace Openings
                 {
                     ElementId = ds.Id.GetValue(),
                     IsLocked = e.Locked,
+                    Status = e.Pinned ? "Pinned" : null,
                     OpeningId = Integer(ds, OpeningParams.OpeningId),
                     HostType = hostType,
                     Shape = shape,
@@ -62,7 +63,7 @@ namespace Openings
                     {
                         HostKey = e.HostKey, Meps = new HashSet<long>(e.Meps), OpeningId = row.OpeningId,
                         HostType = row.HostType, Shape = row.Shape, Size = row.Size, Level = row.Level,
-                        Host = row.Host, Mep = row.Mep
+                        Host = row.Host, Mep = row.Mep, Geo = e.Geo
                     };
             }
             OpeningUpdater.Remember(doc, known);
