@@ -55,6 +55,8 @@ namespace Openings
             else
                 Window.Activate();
 
+            // Openings resized or moved while nobody was watching (the tracker runs from here on).
+            OpeningSync.RefreshAll(uiapp.ActiveUIDocument?.Document, Settings);
             RefreshWindow(uiapp, null);
         }
 

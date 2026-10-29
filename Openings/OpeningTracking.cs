@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.ExtensibleStorage;
@@ -131,7 +132,18 @@ namespace Openings
                                                        new ElementClassFilter(typeof(FamilyInstance)));
             UpdaterRegistry.AddTrigger(_id, filter, Element.GetChangeTypeAny());
             UpdaterRegistry.AddTrigger(_id, filter, Element.GetChangeTypeElementDeletion());
+            // MEP elements: a deleted one takes its openings along.
+            UpdaterRegistry.AddTrigger(_id, new ElementMulticategoryFilter(MepCategories), Element.GetChangeTypeElementDeletion());
         }
+
+        // Every category an opening can be placed for (the Options list, flex ducts / pipes as well).
+        private static readonly List<BuiltInCategory> MepCategories = new List<BuiltInCategory>
+        {
+            BuiltInCategory.OST_DuctCurves, BuiltInCategory.OST_FlexDuctCurves, BuiltInCategory.OST_DuctFitting, BuiltInCategory.OST_DuctAccessory,
+            BuiltInCategory.OST_PipeCurves, BuiltInCategory.OST_FlexPipeCurves, BuiltInCategory.OST_PipeFitting, BuiltInCategory.OST_PipeAccessory,
+            BuiltInCategory.OST_CableTray, BuiltInCategory.OST_CableTrayFitting, BuiltInCategory.OST_Conduit, BuiltInCategory.OST_ConduitFitting,
+            BuiltInCategory.OST_GenericModel,
+        };
 
         /// <summary>Remembers the openings as they are now (refreshed with the palette list).</summary>
         public static void Remember(Document doc, Dictionary<long, DeletedOpening> openings) =>
@@ -149,16 +161,23 @@ namespace Openings
             if (Suppress) return;
             Document doc = data.GetDocument();
 
+            OpeningSync sync = null;
             foreach (ElementId id in data.GetModifiedElementIds())
             {
                 Element el = doc.GetElement(id);
                 if (el == null || !OpeningElements.IsOpening(el)) continue;
                 Parameter p = el.get_Parameter(OpeningParams.Locked.Guid);
                 if (p != null && !p.IsReadOnly && p.AsInteger() != 1) p.Set(1);
+                // Resized with its grips, moved, rotated: the Opening … parameters follow at once.
+                if (sync == null) sync = new OpeningSync(doc, OpeningsSession.Settings ?? OpeningSettings.Load());
+                sync.Refresh(el);
             }
 
             ICollection<ElementId> deleted = data.GetDeletedElementIds();
-            if (deleted.Count == 0 || !_known.TryGetValue(doc.Title, out var known)) return;
+            if (deleted.Count == 0) return;
+            _known.TryGetValue(doc.Title, out var known);
+            DeleteOrphans(doc, deleted, known);
+            if (known == null) return;
             List<DeletedOpening> gone = deleted.Select(id => known.TryGetValue(id.GetValue(), out var d) ? d : null)
                 .Where(d => d != null).ToList();
             if (gone.Count == 0) return;
@@ -168,10 +187,192 @@ namespace Openings
             DeletedOpenings.Write(doc, list);
         }
 
+        /// <summary>
+        /// Openings whose MEP elements are now all gone go with the last of them — locked ones too;
+        /// pinned ones stay. An opening that keeps some of its MEP elements is reshaped by the next run.
+        /// </summary>
+        private static void DeleteOrphans(Document doc, ICollection<ElementId> deleted, Dictionary<long, DeletedOpening> known)
+        {
+            HashSet<long> gone = new HashSet<long>(deleted.Select(id => id.GetValue()));
+            List<ElementId> orphans = OpeningElements.Collect(doc)
+                .Where(el => !el.Pinned && !gone.Contains(el.Id.GetValue()) && Editable(doc, el.Id))
+                .Where(el =>
+                {
+                    HashSet<long> meps = OpeningSync.MepsOf(el);
+                    return meps.Overlaps(gone) && meps.All(m => gone.Contains(m) || doc.GetElement(ElementIdExtensions.FromValue(m)) == null);
+                })
+                .Select(el => el.Id).ToList();
+            if (orphans.Count == 0) return;
+            // Not the user deleting an opening: no tombstone, a new duct there gets a new opening.
+            foreach (ElementId id in orphans) known?.Remove(id.GetValue());
+            doc.Delete(orphans);
+        }
+
+        /// <summary>Not borrowed by someone else (workshared).</summary>
+        internal static bool Editable(Document doc, ElementId id) =>
+            !doc.IsWorkshared || WorksharingUtils.GetCheckoutStatus(doc, id) != CheckoutStatus.OwnedByOtherUser;
+
         public UpdaterId GetUpdaterId() => _myId;
         public ChangePriority GetChangePriority() => ChangePriority.Annotations;
         public string GetUpdaterName() => "Vixeldorf Openings tracker";
-        public string GetAdditionalInformation() => "Locks openings changed by hand and remembers deleted ones.";
+        public string GetAdditionalInformation() =>
+            "Locks openings changed by hand and updates their data, remembers deleted ones, deletes the openings of deleted MEP elements.";
+    }
+
+    /// <summary>
+    /// Brings an opening's data in line with the element as it stands: a family resized with its grips
+    /// (the mapped family parameters → Opening Width / Height / Length / Diameter / Depth), any opening
+    /// moved or rotated by hand (elevations, level, the X in its key). Inside a transaction or an updater.
+    /// </summary>
+    public class OpeningSync
+    {
+        private readonly Document _doc;
+        private readonly OpeningSettings _s;
+        private readonly List<Level> _levels;
+        private readonly double _pbpZ, _spZ, _spSharedZ;
+
+        public OpeningSync(Document doc, OpeningSettings settings)
+        {
+            _doc = doc;
+            _s = settings;
+            _levels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+                .OrderBy(l => l.ProjectElevation).ToList();
+            BasePoint sp = BasePoint.GetSurveyPoint(doc);
+            _pbpZ = BasePoint.GetProjectBasePoint(doc).Position.Z;
+            _spZ = sp.Position.Z;
+            _spSharedZ = sp.SharedPosition.Z;
+        }
+
+        /// <summary>
+        /// Openings changed while the add-in was not watching (before the window was opened in this session,
+        /// on a machine without the add-in) are brought up to date: one undo step, and only if something changed.
+        /// </summary>
+        public static int RefreshAll(Document doc, OpeningSettings settings)
+        {
+            if (doc == null || doc.IsFamilyDocument || doc.IsReadOnly || doc.IsModifiable) return 0;
+            List<Element> all = OpeningElements.Collect(doc).Where(e => OpeningUpdater.Editable(doc, e.Id)).ToList();
+            if (all.Count == 0) return 0;
+            using (new OwnChanges())   // not a change by hand: no Opening Lock
+            using (Transaction t = new Transaction(doc, "Update opening data"))
+            {
+                t.Start();
+                OpeningSync sync = new OpeningSync(doc, settings);
+                int n = all.Count(sync.Refresh);
+                if (n > 0) t.Commit(); else t.RollBack();
+                return n;
+            }
+        }
+
+        /// <returns>True if anything was written.</returns>
+        public bool Refresh(Element el)
+        {
+            bool changed = false;
+            string shape = OpeningEditor.Text(el, OpeningParams.Shape);
+            bool floor = OpeningEditor.Text(el, OpeningParams.HostType) == "Floor";
+
+            if (el is FamilyInstance fi && (shape == "Rectangular" || shape == "Round"))
+            {
+                if (shape == "Round")
+                {
+                    changed |= FromFamily(fi, _s.MapDiameter, OpeningParams.Diameter);
+                    changed |= FromFamily(fi, _s.MapRoundDepth, OpeningParams.Depth);
+                }
+                else
+                {
+                    changed |= FromFamily(fi, _s.MapWidth, OpeningParams.Width);
+                    changed |= FromFamily(fi, _s.MapHeight, floor ? OpeningParams.Length : OpeningParams.Height);
+                    changed |= FromFamily(fi, _s.MapDepth, OpeningParams.Depth);
+                }
+                changed |= KeepX(fi);
+            }
+
+            XYZ c = OpeningElements.CenterOf(el);
+            if (c == null) return changed;
+            double half = floor ? OpeningEditor.Number(el, OpeningParams.Depth) / 2
+                        : shape == "Round" ? OpeningEditor.Number(el, OpeningParams.Diameter) / 2
+                        : OpeningEditor.Number(el, OpeningParams.Height) / 2;
+            double bottom = c.Z - half;
+
+            // The floor below a wall opening stays where it was found: its level, from the values written then.
+            Parameter oldCenter = el.get_Parameter(OpeningParams.CenterElevPbp.Guid);
+            Parameter oldFromFloor = el.get_Parameter(OpeningParams.CenterFromFloor.Guid);
+            if (oldCenter != null && oldCenter.HasValue && oldFromFloor != null && oldFromFloor.HasValue)
+            {
+                double floorZ = oldCenter.AsDouble() + _pbpZ - oldFromFloor.AsDouble();
+                changed |= Put(el, OpeningParams.BottomFromFloor, bottom - floorZ);
+                changed |= Put(el, OpeningParams.CenterFromFloor, c.Z - floorZ);
+            }
+            changed |= Put(el, OpeningParams.BottomElevPbp, bottom - _pbpZ);
+            changed |= Put(el, OpeningParams.CenterElevPbp, c.Z - _pbpZ);
+            changed |= Put(el, OpeningParams.BottomElevSp, bottom - _spZ + _spSharedZ);
+            changed |= Put(el, OpeningParams.CenterElevSp, c.Z - _spZ + _spSharedZ);
+
+            Level level = _levels.LastOrDefault(l => l.ProjectElevation <= c.Z + 1e-6) ?? _levels.FirstOrDefault();
+            if (level != null && OpeningEditor.Text(el, OpeningParams.LevelName) != level.Name)
+                changed |= Put(el, OpeningParams.LevelName, level.Name);
+            return changed;
+        }
+
+        /// <summary>The MEP element ids in the opening's key.</summary>
+        public static HashSet<long> MepsOf(Element el)
+        {
+            HashSet<long> meps = new HashSet<long>();
+            string part = (OpeningElements.GetKey(el) ?? "").Split(';').FirstOrDefault(p => p.StartsWith("mep="));
+            if (part != null)
+                foreach (string id in part.Substring(4).Split(','))
+                    if (long.TryParse(id, out long v)) meps.Add(v);
+            return meps;
+        }
+
+        private static bool FromFamily(FamilyInstance fi, string name, OpeningParam op)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return false;
+            Parameter p = fi.LookupParameter(name);
+            return p != null && p.HasValue && p.StorageType == StorageType.Double && Put(fi, op, p.AsDouble());
+        }
+
+        /// <summary>A family rotated by hand: the X stored in the key (used by Edit and Section) follows it.</summary>
+        private static bool KeepX(FamilyInstance fi)
+        {
+            XYZ h = new XYZ(fi.HandOrientation.X, fi.HandOrientation.Y, 0);
+            if (h.GetLength() < 1e-9) return false;
+            h = h.Normalize();
+            string key = OpeningElements.GetKey(fi) ?? "";
+            List<string> parts = key.Split(';').Where(p => p.Length > 0).ToList();
+            int i = parts.FindIndex(p => p.StartsWith("x="));
+            if (i >= 0)
+            {
+                string[] xy = parts[i].Substring(2).Split(',');
+                if (xy.Length == 2 &&
+                    double.TryParse(xy[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double dx) &&
+                    double.TryParse(xy[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double dy) &&
+                    new XYZ(dx, dy, 0).DotProduct(h) > 1 - 1e-9)
+                    return false;
+            }
+            else if (!key.Contains("host=")) return false;   // no key to keep it in
+
+            string x = "x=" + h.X.ToString("R", CultureInfo.InvariantCulture) + "," + h.Y.ToString("R", CultureInfo.InvariantCulture);
+            if (i >= 0) parts[i] = x;
+            else parts.Insert(Math.Min(2, parts.Count), x);
+            OpeningElements.SetKey(fi, string.Join(";", parts));
+            return true;
+        }
+
+        private static bool Put(Element e, OpeningParam op, double value)
+        {
+            Parameter p = e.get_Parameter(op.Guid);
+            if (p == null || p.IsReadOnly || (p.HasValue && Math.Abs(p.AsDouble() - value) < 1e-6)) return false;
+            p.Set(value);
+            return true;
+        }
+
+        private static bool Put(Element e, OpeningParam op, string value)
+        {
+            Parameter p = e.get_Parameter(op.Guid);
+            if (p == null || p.IsReadOnly) return false;
+            p.Set(value);
+            return true;
+        }
     }
 
     /// <summary>Sets <see cref="OpeningUpdater.Suppress"/> for the add-in's own changes.</summary>

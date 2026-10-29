@@ -144,6 +144,12 @@ namespace Openings
                 // Pinned: never deleted by a run. Locked: kept by a whole-view run — unless its MEP elements
                 // moved, then it follows them like any other opening (here: it no longer crosses, so it goes).
                 if (e.Pinned) continue;
+                // Its MEP elements were all deleted while the tracker was not running: it goes, locked or not.
+                if (e.Meps.All(id => doc.GetElement(ElementIdExtensions.FromValue(id)) == null))
+                {
+                    Obsolete.Add(e);
+                    continue;
+                }
                 if (respectLocks && e.Locked && !e.MepMoved(doc, e.Meps)) continue;
                 bool noLongerCrosses = checkedHosts.Contains(e.HostKey) && e.Meps.All(checkedMeps.Contains);
                 if (superseded.Contains(e) || noLongerCrosses)
