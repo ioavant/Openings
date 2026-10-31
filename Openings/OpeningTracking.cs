@@ -288,19 +288,33 @@ namespace Openings
 
             XYZ c = OpeningElements.CenterOf(el);
             if (c == null) return changed;
-            double half = floor ? OpeningEditor.Number(el, OpeningParams.Depth) / 2
-                        : shape == "Round" ? OpeningEditor.Number(el, OpeningParams.Diameter) / 2
-                        : OpeningEditor.Number(el, OpeningParams.Height) / 2;
-            double bottom = c.Z - half;
+            double bottom = c.Z - HalfHeight(el, shape, floor);
 
-            // The floor below a wall opening stays where it was found: its level, from the values written then.
-            Parameter oldCenter = el.get_Parameter(OpeningParams.CenterElevPbp.Guid);
-            Parameter oldFromFloor = el.get_Parameter(OpeningParams.CenterFromFloor.Guid);
-            if (oldCenter != null && oldCenter.HasValue && oldFromFloor != null && oldFromFloor.HasValue)
+            // The floor below a wall opening stays where it was found (or where the user put it): the "from floor"
+            // heights follow the opening when it moves. Bottom and Center From Floor normally point at one floor;
+            // when they disagree the user typed one of them (in Revit's properties) — the one that moved away from
+            // the stored floor. Its floor becomes the opening's floor, set by hand: kept, marked *, locked.
+            double? stored = StoredFloor(el);
+            double? fromB = Implied(el, OpeningParams.BottomElevPbp, OpeningParams.BottomFromFloor);
+            double? fromC = Implied(el, OpeningParams.CenterElevPbp, OpeningParams.CenterFromFloor);
+            bool byHand = FloorByHand(el);
+            double? floorZ = fromC ?? fromB ?? stored;
+            if (fromB.HasValue && fromC.HasValue && Math.Abs(fromB.Value - fromC.Value) > FloorTolerance)
             {
-                double floorZ = oldCenter.AsDouble() + _pbpZ - oldFromFloor.AsDouble();
-                changed |= Put(el, OpeningParams.BottomFromFloor, bottom - floorZ);
-                changed |= Put(el, OpeningParams.CenterFromFloor, c.Z - floorZ);
+                double s0 = stored ?? fromC.Value;   // older opening (no floor stored): Bottom is the one users edit
+                floorZ = Math.Abs(fromB.Value - s0) >= Math.Abs(fromC.Value - s0) ? fromB : fromC;
+                if (!byHand)
+                {
+                    byHand = true;
+                    changed |= Put(el, OpeningParams.FloorInfo, ByHandText);
+                    changed |= PutLock(el);
+                }
+            }
+            if (floorZ.HasValue && !floor)
+            {
+                changed |= Put(el, OpeningParams.BottomFromFloor, bottom - floorZ.Value);
+                changed |= Put(el, OpeningParams.CenterFromFloor, c.Z - floorZ.Value);
+                changed |= StoreFloor(el, floorZ, byHand);
             }
             changed |= Put(el, OpeningParams.BottomElevPbp, bottom - _pbpZ);
             changed |= Put(el, OpeningParams.CenterElevPbp, c.Z - _pbpZ);
@@ -311,6 +325,66 @@ namespace Openings
             if (level != null && OpeningEditor.Text(el, OpeningParams.LevelName) != level.Name)
                 changed |= Put(el, OpeningParams.LevelName, level.Name);
             return changed;
+        }
+
+        // ── The floor a wall opening's heights are measured from ─────────────
+
+        /// <summary>Key part with the floor's model Z; and the flag that the user set it.</summary>
+        public const string FloorPart = "floor", ByHandPart = "floorset";
+        public const string ByHandText = "* set by hand";
+        private static readonly double FloorTolerance = 0.5 / 304.8;
+
+        public static double? StoredFloor(Element el) =>
+            double.TryParse(OpeningElements.GetKeyPart(el, FloorPart), NumberStyles.Float, CultureInfo.InvariantCulture, out double z)
+                ? z : (double?)null;
+
+        public static bool FloorByHand(Element el) => OpeningElements.GetKeyPart(el, ByHandPart) == "1";
+
+        /// <summary>Inside a transaction. Null forgets the floor. True if the key changed.</summary>
+        public static bool StoreFloor(Element el, double? z, bool byHand)
+        {
+            bool changed = OpeningElements.SetKeyPart(el, FloorPart, z?.ToString("R", CultureInfo.InvariantCulture));
+            changed |= OpeningElements.SetKeyPart(el, ByHandPart, z.HasValue && byHand ? "1" : null);
+            return changed;
+        }
+
+        /// <summary>
+        /// Inside a transaction. The user's own height of a wall opening's bottom above the floor (the palette's
+        /// Bottom from floor cell): the opening stays where it is, the floor it is measured from moves — set by
+        /// hand, marked *, locked. False for an opening that has no floor height (in a slab).
+        /// </summary>
+        public bool SetBottomFromFloor(Element el, double value)
+        {
+            if (OpeningEditor.Text(el, OpeningParams.HostType) != "Wall") return false;
+            XYZ c = OpeningElements.CenterOf(el);
+            if (c == null) return false;
+            double floorZ = c.Z - HalfHeight(el, OpeningEditor.Text(el, OpeningParams.Shape), false) - value;
+            Put(el, OpeningParams.BottomFromFloor, value);
+            Put(el, OpeningParams.CenterFromFloor, c.Z - floorZ);
+            Put(el, OpeningParams.FloorInfo, ByHandText);
+            PutLock(el);
+            StoreFloor(el, floorZ, true);
+            return true;
+        }
+
+        private static double HalfHeight(Element el, string shape, bool floor) =>
+            floor ? OpeningEditor.Number(el, OpeningParams.Depth) / 2
+            : shape == "Round" ? OpeningEditor.Number(el, OpeningParams.Diameter) / 2
+            : OpeningEditor.Number(el, OpeningParams.Height) / 2;
+
+        /// <summary>The floor an elevation / from-floor pair of parameters points at, or null if either is empty.</summary>
+        private double? Implied(Element el, OpeningParam elevPbp, OpeningParam fromFloor)
+        {
+            Parameter e = el.get_Parameter(elevPbp.Guid), f = el.get_Parameter(fromFloor.Guid);
+            return e != null && e.HasValue && f != null && f.HasValue ? e.AsDouble() + _pbpZ - f.AsDouble() : (double?)null;
+        }
+
+        private static bool PutLock(Element el)
+        {
+            Parameter p = el.get_Parameter(OpeningParams.Locked.Guid);
+            if (p == null || p.IsReadOnly || p.AsInteger() == 1) return false;
+            p.Set(1);
+            return true;
         }
 
         /// <summary>The MEP element ids in the opening's key.</summary>

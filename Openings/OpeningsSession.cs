@@ -21,7 +21,8 @@ namespace Openings
         Cleanup,   // palette closed: drop a running sketch and the temporary sections
         Convert,   // selected openings (or all in the active view) to the representation chosen in the window
         Lock,      // set Opening Lock on the given openings
-        Unlock     // clear it; for a deleted opening (negative id) forget the deletion, so a run recreates it
+        Unlock,    // clear it; for a deleted opening (negative id) forget the deletion, so a run recreates it
+        SetFromFloor // the user's own Bottom From Floor for the given wall opening (value): set by hand, marked *, locked
     }
 
     /// <summary>
@@ -61,10 +62,10 @@ namespace Openings
         }
 
         /// <summary>From the window: queue an action for the next API context.</summary>
-        internal static void Raise(OpeningsAction action, IEnumerable<long> ids = null)
+        internal static void Raise(OpeningsAction action, IEnumerable<long> ids = null, double? value = null)
         {
             if (_event == null) return;
-            _handler.Enqueue(action, ids);
+            _handler.Enqueue(action, ids, value);
             _event.Raise();
         }
 
@@ -78,12 +79,16 @@ namespace Openings
                 Window.ShowNoProject();
                 return;
             }
+            // Opening families the user placed by hand since the last look: into the list, highlighted.
+            AdoptResult adopted = OpeningAdopter.AdoptAll(doc, Settings);
+            if (highlight == null && adopted.Adopted.Count > 0) highlight = adopted.Adopted;
             Window.Fill(doc.Title,
                 HostSource.Collect(doc),
                 FamilyCatalog.Collect(doc),
                 OpeningRow.Build(doc),
                 doc.GetUnits().GetFormatOptions(SpecTypeId.Length).GetUnitTypeId(),
                 highlight?.Select(id => id.GetValue()));
+            Window.SetNote(adopted.Note);
         }
     }
 
@@ -93,22 +98,22 @@ namespace Openings
         private static OpeningEditor _editor;
 
         private readonly object _lock = new object();
-        private readonly List<(OpeningsAction action, List<long> ids)> _queue = new List<(OpeningsAction, List<long>)>();
+        private readonly List<(OpeningsAction action, List<long> ids, double? value)> _queue = new List<(OpeningsAction, List<long>, double?)>();
 
         // Raise() while the event is still pending runs it once: actions queue up instead of
         // overwriting each other (a refresh on window activation must not swallow a Place click).
-        public void Enqueue(OpeningsAction action, IEnumerable<long> ids)
+        public void Enqueue(OpeningsAction action, IEnumerable<long> ids, double? value = null)
         {
             lock (_lock)
             {
                 if (action == OpeningsAction.Refresh && _queue.Any(q => q.action == OpeningsAction.Refresh)) return;
-                _queue.Add((action, ids?.ToList() ?? new List<long>()));
+                _queue.Add((action, ids?.ToList() ?? new List<long>(), value));
             }
         }
 
         public void Execute(UIApplication app)
         {
-            List<(OpeningsAction action, List<long> ids)> batch;
+            List<(OpeningsAction action, List<long> ids, double? value)> batch;
             lock (_lock)
             {
                 batch = _queue.ToList();
@@ -122,7 +127,7 @@ namespace Openings
                 try
                 {
                     using (item.action == OpeningsAction.Delete ? null : new OwnChanges())
-                        Run(app, item.action, item.ids);
+                        Run(app, item.action, item.ids, item.value);
                 }
                 catch (Exception ex) { TaskDialog.Show("Openings", $"{item.action} failed:\n{ex.Message}"); }
             }
@@ -130,7 +135,7 @@ namespace Openings
 
         public string GetName() => "Vixeldorf Openings";
 
-        private static void Run(UIApplication app, OpeningsAction action, List<long> ids)
+        private static void Run(UIApplication app, OpeningsAction action, List<long> ids, double? value)
         {
             UIDocument uidoc = app.ActiveUIDocument;
             Document doc = uidoc?.Document;
@@ -213,6 +218,24 @@ namespace Openings
                     if (_editor != null) { _editor.Cancel(doc); _editor = null; }
                     OpeningSection.Cleanup(doc, uidoc.ActiveView?.Id);
                     break;
+
+                case OpeningsAction.SetFromFloor:
+                {
+                    List<ElementId> set = Openings(doc, ids);
+                    if (set.Count > 0 && value.HasValue)
+                    {
+                        SharedParamHelper.EnsureParameters(doc);
+                        using (Transaction t = new Transaction(doc, "Set height above floor"))
+                        {
+                            t.Start();
+                            OpeningSync sync = new OpeningSync(doc, OpeningsSession.Settings ?? OpeningSettings.Load());
+                            foreach (ElementId id in set) sync.SetBottomFromFloor(doc.GetElement(id), value.Value);
+                            t.Commit();
+                        }
+                    }
+                    OpeningsSession.RefreshWindow(app, set);
+                    break;
+                }
 
                 case OpeningsAction.Lock:
                 case OpeningsAction.Unlock:

@@ -89,6 +89,7 @@ namespace Openings
         public bool IsRound;
         public double Insulation;
         public Connector End;                         // fitting/accessory: its connector on the crossing side
+        public bool Extended;                         // a selected pair that does not touch: placed on the host's extended faces
         public Frame Frame;
 
         // ShaftMaster shaft crossing a slab: one opening per shaft, exactly its profile, no margin.
@@ -109,13 +110,28 @@ namespace Openings
         /// <summary>HostItem.Key of every host searched: an opening in any other host is out of this run's scope.</summary>
         public HashSet<string> CheckedHosts { get; } = new HashSet<string>();
 
+        /// <summary>Selected pairs that do not touch and got their crossing on the host's extended faces.</summary>
+        public int Extended { get; private set; }
+
+        /// <param name="pickedHosts">Walls / floors the user selected (here or in a link); with <paramref name="pickedMeps"/>
+        /// they form pairs that get an opening even where they do not touch — the host's faces are extended to the element.
+        /// Searched even when not visible or not of a ticked category: the user picked them.</param>
         public List<Penetration> Find(
             IList<Element> mepElements,
             IList<HostSource> sources,
             ICollection<BuiltInCategory> hostCategories,
-            View view)
+            View view,
+            IList<HostItem> pickedHosts = null,
+            ICollection<long> pickedMeps = null)
         {
             List<HostItem> hosts = CollectHosts(sources, hostCategories, view);
+            HashSet<string> forced = new HashSet<string>();
+            if (pickedHosts != null && pickedMeps != null && pickedMeps.Count > 0)
+                foreach (HostItem h in pickedHosts)
+                {
+                    forced.Add(h.Key);
+                    if (hosts.All(x => x.Key != h.Key)) hosts.Add(h);
+                }
             foreach (HostItem h in hosts) CheckedHosts.Add(h.Key);
             List<Penetration> result = new List<Penetration>();
             if (hosts.Count == 0) return result;
@@ -124,16 +140,18 @@ namespace Openings
             {
                 BoundingBoxXYZ bb = mep.get_BoundingBox(null);
                 if (bb == null) continue;
+                bool picked = pickedMeps != null && pickedMeps.Contains(mep.Id.GetValue());
 
                 List<Solid> mepSolids = null;
                 foreach (HostItem host in hosts)
                 {
-                    if (!GeometryUtils.BoxesOverlap(bb.Min, bb.Max, host.Min, host.Max)) continue;
+                    bool force = picked && forced.Contains(host.Key);
+                    if (!force && !GeometryUtils.BoxesOverlap(bb.Min, bb.Max, host.Min, host.Max)) continue;
 
                     mepSolids ??= GeometryUtils.GetSolids(mep, null);
                     if (mepSolids.Count == 0) break;
 
-                    Penetration p = Intersect(mep, mepSolids, host);
+                    Penetration p = Intersect(mep, mepSolids, host, force);
                     if (p != null) result.Add(p);
                 }
             }
@@ -159,22 +177,20 @@ namespace Openings
                 foreach (Element e in collector.WherePasses(filter).WhereElementIsNotElementType())
                 {
                     if (e is Wall w && w.WallType.Kind == WallKind.Curtain) continue;
-
-                    BoundingBoxXYZ bb = e.get_BoundingBox(null);
-                    if (bb == null) continue;
-                    GeometryUtils.TransformBox(bb.Min, bb.Max, src.Transform, out XYZ min, out XYZ max);
-
-                    hosts.Add(new HostItem
-                    {
-                        Source = src,
-                        Element = e,
-                        Kind = KindOf(e),
-                        Min = min,
-                        Max = max
-                    });
+                    HostItem h = MakeHost(src, e);
+                    if (h != null) hosts.Add(h);
                 }
             }
             return hosts;
+        }
+
+        /// <summary>A host element of <paramref name="src"/> with its box in host coordinates; null without geometry.</summary>
+        public static HostItem MakeHost(HostSource src, Element e)
+        {
+            BoundingBoxXYZ bb = e.get_BoundingBox(null);
+            if (bb == null) return null;
+            GeometryUtils.TransformBox(bb.Min, bb.Max, src.Transform, out XYZ min, out XYZ max);
+            return new HostItem { Source = src, Element = e, Kind = KindOf(e), Min = min, Max = max };
         }
 
         private static HostKind KindOf(Element e)
@@ -185,7 +201,8 @@ namespace Openings
                 : HostKind.Floor;
         }
 
-        private Penetration Intersect(Element mep, List<Solid> mepSolids, HostItem host)
+        /// <param name="force">A pair the user selected: with no real intersection, the host's faces are extended.</param>
+        private Penetration Intersect(Element mep, List<Solid> mepSolids, HostItem host, bool force)
         {
             List<XYZ> points = new List<XYZ>();
             foreach (Solid ms in mepSolids)
@@ -206,9 +223,17 @@ namespace Openings
                         GeometryUtils.CollectVertices(inter, points);
                 }
             }
-            if (points.Count == 0) return null;
+            bool extended = false;
+            if (points.Count == 0)
+            {
+                if (!force) return null;
+                points = ExtendedCrossing(mep, host);
+                if (points == null) return null;
+                extended = true;
+                Extended++;
+            }
 
-            Penetration p = new Penetration { Mep = mep, Host = host, Points = points };
+            Penetration p = new Penetration { Mep = mep, Host = host, Points = points, Extended = extended };
             ReadMepProfile(mep, p);
             if (host.Kind == HostKind.Floor) ReadShaft(mep, mepSolids, p);
             bool axisKnown = p.Axis != null;
@@ -225,6 +250,89 @@ namespace Openings
 
             p.Points = SweepSection(mep, mepSolids, p, normal);
             return p;
+        }
+
+        // ── Selected pairs that do not touch ──────────────────────────────────
+
+        /// <summary>
+        /// A selected MEP element and a selected host that do not touch — a modelling gap: a wall not taken up
+        /// to the slab, a duct just past the end of a wall. The host's two main faces are taken as unbounded
+        /// planes, and the crossing is where the element's axis runs between them: two points on the axis, one
+        /// on each plane (they give the opening its depth and position; its size comes from the element's
+        /// section as usual). Null, with a warning, when the element runs along the host or never reaches it.
+        /// </summary>
+        private List<XYZ> ExtendedCrossing(Element mep, HostItem host)
+        {
+            string what = $"Selected MEP {mep.Id.GetValue()} × {host.Describe()}";
+            Line axis = StraightAxis(mep);
+            if (axis == null) { Warnings.Add($"{what}: no straight axis to extend to the host — skipped."); return null; }
+            if (!HostPlanes(host, out XYZ n, out double dMin, out double dMax))
+            {
+                Warnings.Add($"{what}: the host has no flat faces to extend (curved?) — skipped.");
+                return null;
+            }
+
+            XYZ p0 = axis.GetEndPoint(0), dir = axis.Direction;
+            double along = n.DotProduct(dir);
+            if (Math.Abs(along) < MinCrossingCos) { Warnings.Add($"{what}: runs along the host — skipped."); return null; }
+
+            double t1 = (dMin - n.DotProduct(p0)) / along, t2 = (dMax - n.DotProduct(p0)) / along;
+            if (Math.Max(t1, t2) < 0 || Math.Min(t1, t2) > axis.Length)
+            {
+                Warnings.Add($"{what}: does not reach the host's extended faces — skipped.");
+                return null;
+            }
+            return new List<XYZ> { p0 + dir * t1, p0 + dir * t2 };
+        }
+
+        /// <summary>Duct / pipe location line; a straight fitting or accessory between its two opposite connectors.</summary>
+        private static Line StraightAxis(Element mep)
+        {
+            if (mep.Location is LocationCurve lc && lc.Curve is Line line) return line;
+
+            ConnectorManager cm = (mep as FamilyInstance)?.MEPModel?.ConnectorManager;
+            if (cm == null) return null;
+            List<Connector> ends = cm.Connectors.Cast<Connector>().Where(c => c.ConnectorType == ConnectorType.End).ToList();
+            if (ends.Count != 2 || ends[0].Origin.DistanceTo(ends[1].Origin) < 1e-6) return null;
+            if (ends[0].CoordinateSystem.BasisZ.DotProduct(ends[1].CoordinateSystem.BasisZ) > -0.999) return null;   // an elbow
+            return Line.CreateBound(ends[0].Origin, ends[1].Origin);
+        }
+
+        /// <summary>
+        /// The host's main faces as planes: normal <paramref name="n"/> and their offsets along it. Walls and beams:
+        /// the largest upright face (square to a straight location line); floors, roofs, ceilings: the largest lying one.
+        /// </summary>
+        private static bool HostPlanes(HostItem host, out XYZ n, out double dMin, out double dMax)
+        {
+            n = null;
+            dMin = double.MaxValue;
+            dMax = double.MinValue;
+
+            XYZ along = null;
+            if (host.Kind == HostKind.Wall)
+            {
+                if (host.Axis != null && !(host.Axis is Line)) return false;   // curved wall: no planes to extend
+                along = (host.Axis as Line)?.Direction;
+            }
+
+            List<PlanarFace> faces = host.Solids.SelectMany(sol => sol.Faces.OfType<PlanarFace>()).ToList();
+            PlanarFace main = faces
+                .Where(f => host.Kind == HostKind.Wall
+                    ? Math.Abs(f.FaceNormal.Z) < 0.5 && (along == null || Math.Abs(f.FaceNormal.DotProduct(along)) < 0.1)
+                    : Math.Abs(f.FaceNormal.Z) >= 0.5)
+                .OrderByDescending(f => f.Area)
+                .FirstOrDefault();
+            if (main == null) return false;
+
+            n = main.FaceNormal;
+            foreach (PlanarFace f in faces)
+            {
+                if (Math.Abs(f.FaceNormal.DotProduct(n)) < 0.999) continue;
+                double d = f.Origin.DotProduct(n);
+                dMin = Math.Min(dMin, d);
+                dMax = Math.Max(dMax, d);
+            }
+            return dMax - dMin > 1e-6;
         }
 
         // ── Section swept through the host ────────────────────────────────────

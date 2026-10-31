@@ -55,9 +55,13 @@ namespace Openings
             List<string> warnings = new List<string>();
             Stopwatch sw = Stopwatch.StartNew();
 
+            // Opening families placed by hand count as openings from here on (matched, kept, updated like the rest).
+            OpeningAdopter.AdoptAll(doc, settings);
+
             // ── MEP elements: the selected ones, or everything visible in the view ─
             List<ExistingOpening> existing = ExistingOpening.Collect(doc);
-            IList<Element> meps = CollectMep(doc, view, uidoc.Selection.GetElementIds(), settings, existing, out string scope);
+            ICollection<ElementId> selection = uidoc.Selection.GetElementIds();
+            IList<Element> meps = CollectMep(doc, view, selection, settings, existing, out string scope);
             if (meps.Count == 0)
             {
                 TaskDialog.Show("Openings", "No elements of the ticked MEP categories are visible in this view.");
@@ -67,7 +71,17 @@ namespace Openings
             // ── Intersections → openings ──────────────────────────────────────
             List<BuiltInCategory> hostCats = ToCategories(settings.HostCategories);
             IntersectionFinder finder = new IntersectionFinder();
-            List<Penetration> penetrations = finder.Find(meps, sources, hostCats, view);
+            // Selected MEP elements with selected walls / floors (here, or Tab-picked in a link): each such pair
+            // gets an opening even where they do not touch — a modelling gap the user is pointing at.
+            List<HostItem> pickedHosts = new List<HostItem>();
+            HashSet<long> pickedMeps = new HashSet<long>();
+            if (scope == "Selected")
+            {
+                pickedHosts = SelectedHosts.Read(uidoc);
+                HashSet<long> selIds = new HashSet<long>(selection.Select(id => id.GetValue()));
+                pickedMeps = new HashSet<long>(meps.Select(m => m.Id.GetValue()).Where(selIds.Contains));
+            }
+            List<Penetration> penetrations = finder.Find(meps, sources, hostCats, view, pickedHosts, pickedMeps);
             warnings.AddRange(finder.Warnings);
 
             OpeningPlanner planner = new OpeningPlanner(settings);
@@ -140,6 +154,8 @@ namespace Openings
             StringBuilder sb = new StringBuilder();
             sb.AppendLine($"{scope}: {meps.Count} MEP elements checked");
             sb.AppendLine($"Crossings found: {penetrations.Count}");
+            if (finder.Extended > 0)
+                sb.AppendLine($"Selected pairs that do not touch — placed on the extended wall / floor: {finder.Extended}");
             sb.AppendLine($"Openings: {plans.Count} ({plans.Count(p => p.Round)} round, {planner.MergedGroups} merged)");
             sb.AppendLine($"Created: {placer.Created}, updated: {placer.Updated}, deleted: {placer.Deleted}, skipped: {skipped}");
             if (placer.LockedButMoved > 0)

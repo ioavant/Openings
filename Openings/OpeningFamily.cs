@@ -52,13 +52,53 @@ namespace Openings
         public static string GetKey(Element e) =>
             e is DirectShape ds ? ds.ApplicationDataId : KeyEntity(e)?.Get<string>(Field);
 
-        /// <summary>Inside a transaction.</summary>
+        // Parts only SetKeyPart writes: the floor the "from floor" heights are measured from (OpeningSync).
+        private static readonly string[] KeptParts = { OpeningSync.FloorPart + "=", OpeningSync.ByHandPart + "=" };
+
+        /// <summary>
+        /// Inside a transaction. Replaces the key (host / mep / x / geo); the floor parts of the old key are
+        /// carried over when the new one has none, so placing, editing or converting never drops a floor
+        /// the user set by hand.
+        /// </summary>
         public static void SetKey(Element e, string key)
+        {
+            key = key ?? "";
+            foreach (string part in (GetKey(e) ?? "").Split(';'))
+                if (KeptParts.Any(k => part.StartsWith(k)) && !key.Split(';').Any(p => p.StartsWith(part.Substring(0, part.IndexOf('=') + 1))))
+                    key += (key.Length > 0 ? ";" : "") + part;
+            WriteKey(e, key);
+        }
+
+        private static void WriteKey(Element e, string key)
         {
             if (e is DirectShape ds) { ds.ApplicationDataId = key; return; }
             Entity en = new Entity(GetSchema());
             en.Set(Field, key ?? "");
             e.SetEntity(en);
+        }
+
+        /// <summary>One "name=value" part of the key, or null.</summary>
+        public static string GetKeyPart(Element e, string name) =>
+            (GetKey(e) ?? "").Split(';').FirstOrDefault(p => p.StartsWith(name + "="))?.Substring(name.Length + 1);
+
+        /// <summary>Inside a transaction. Sets one key part (null removes it). True if the key changed.</summary>
+        public static bool SetKeyPart(Element e, string name, string value)
+        {
+            List<string> parts = (GetKey(e) ?? "").Split(';').Where(p => p.Length > 0).ToList();
+            int i = parts.FindIndex(p => p.StartsWith(name + "="));
+            string now = value == null ? null : name + "=" + value;
+            if (i >= 0)
+            {
+                if (parts[i] == now) return false;
+                if (now == null) parts.RemoveAt(i); else parts[i] = now;
+            }
+            else
+            {
+                if (now == null) return false;
+                parts.Add(now);
+            }
+            WriteKey(e, string.Join(";", parts));
+            return true;
         }
 
         public static List<Element> Collect(Document doc) => Collect(doc, null);
@@ -346,7 +386,7 @@ namespace Openings
         private FamilyInstance WriteFamily(OpeningPlan plan, FamilyInstance fi, FamilySymbol sym, out string note)
         {
             note = null;
-            if (!FindFace(plan, out Reference face, out XYZ origin, out XYZ normal))
+            if (!FindFace(plan, out Reference face, out XYZ origin, out XYZ normal, out XYZ hostAt))
             {
                 note = "no face of the host found at the opening";
                 return null;
@@ -363,8 +403,12 @@ namespace Openings
                 else
                 {
                     if (!sym.IsActive) { sym.Activate(); _doc.Regenerate(); }
-                    fi = _doc.Create.NewFamilyInstance(face, origin, refDir, sym);
+                    // Hosted where the face is under the opening, then moved so the insertion point is the
+                    // opening's middle — which may be off the face (an opening past a wall end, over its top).
+                    fi = _doc.Create.NewFamilyInstance(face, hostAt, refDir, sym);
                     created = true;
+                    XYZ shift = origin - hostAt;
+                    if (shift.GetLength() > 1e-9) ElementTransformUtils.MoveElement(_doc, fi.Id, shift);
                 }
                 SetSize(fi, plan);
                 return fi;
@@ -427,35 +471,118 @@ namespace Openings
         }
 
         /// <summary>
-        /// The host's planar face across the opening's direction (wall: ±Y, slab: ±Z) that the opening's
-        /// middle projects onto, in host coordinates. Always the same side when there is one — wall +Y,
-        /// slab top — so a re-run finds the face the instance is already on.
+        /// The host's planar face across the opening's direction (wall: ±Y, slab: ±Z) to host the family on, in
+        /// host coordinates: <paramref name="origin"/> is the opening's middle on that face's plane (where the
+        /// insertion point goes), <paramref name="hostAt"/> a point on the face itself to create the instance at.
+        ///
+        /// A face counts when the opening touches it at all, not only when its middle is on it:
+        /// 1. the middle projects onto the face;
+        /// 2. the middle is off the face, but the opening's outline overlaps the host (past a wall end, over a
+        ///    wall's top): a point of the overlap on the face;
+        /// 3. no overlap, but the opening lies in the host's plane (a selected pair that does not touch, a wall
+        ///    short of the slab): any point of the face.
+        /// The same side wins when there is one — wall +Y, slab top — so a re-run finds the face the instance is
+        /// already on; then the lower case, then the nearer plane.
         /// </summary>
-        private bool FindFace(OpeningPlan plan, out Reference face, out XYZ origin, out XYZ normal)
+        private bool FindFace(OpeningPlan plan, out Reference face, out XYZ origin, out XYZ normal, out XYZ hostAt)
         {
-            face = null; origin = normal = null;
+            face = null; origin = normal = hostAt = null;
             if (!ResolveHost(plan.HostKey, out Element host, out RevitLinkInstance link, out Transform t)) return false;
 
             XYZ dir = plan.Kind == HostKind.Wall ? plan.Frame.Y : XYZ.BasisZ;
             XYZ local = t.Inverse.OfPoint(plan.Center);
+            List<PlanarFace> faces = HostFaces(host, out List<Solid> solids);
+            List<Solid> overlap = null;   // the opening ∩ the host, in link coordinates; worked out only when needed
+
             double best = double.MaxValue;
-            foreach (PlanarFace pf in PlanarFaces(host))
+            foreach (PlanarFace pf in faces)
             {
                 if (pf.Reference == null) continue;
                 XYZ n = t.OfVector(pf.FaceNormal);
                 double along = n.DotProduct(dir);
                 if (Math.Abs(along) < 0.999) continue;
-                IntersectionResult r = pf.Project(local);
-                if (r == null) continue;   // outside this face (another part of the host, or a hole in it)
 
-                double score = r.Distance + (along > 0 ? 0 : 1e6);
+                double dist = Math.Abs((local - pf.Origin).DotProduct(pf.FaceNormal));
+                XYZ onFace;
+                int tier;
+                IntersectionResult r = pf.Project(local);
+                if (r != null) { onFace = r.XYZPoint; tier = 0; }
+                else
+                {
+                    if (overlap == null) overlap = Overlap(plan, solids, t);
+                    onFace = PointOnFace(pf, overlap);
+                    tier = 1;
+                    if (onFace == null && dist <= plan.Depth + 1e-6)
+                    {
+                        onFace = InsidePoint(pf);
+                        tier = 2;
+                    }
+                    if (onFace == null) continue;   // nowhere near this face
+                }
+
+                double score = (along > 0 ? 0 : 1e6) + tier * 1e3 + dist;
                 if (score >= best) continue;
                 best = score;
                 normal = n;
-                origin = t.OfPoint(r.XYZPoint);
+                origin = t.OfPoint(local - pf.FaceNormal * (local - pf.Origin).DotProduct(pf.FaceNormal));
+                hostAt = t.OfPoint(onFace);
                 face = link != null ? pf.Reference.CreateLinkReference(link) : pf.Reference;
             }
             return face != null;
+        }
+
+        /// <summary>The opening's volume (a little deeper than the host) intersected with the host body, in link coordinates.</summary>
+        private static List<Solid> Overlap(OpeningPlan plan, List<Solid> hostSolids, Transform t)
+        {
+            List<Solid> result = new List<Solid>();
+            OpeningPlan deeper = plan.Clone();
+            deeper.Depth = plan.Depth + 2 * (20 / 304.8);   // reaches both faces whatever the rounding
+            Solid prism;
+            try { prism = SolidUtils.CreateTransformed(OpeningPlacer.BuildSolid(deeper), t.Inverse); }
+            catch { return result; }
+
+            foreach (Solid hs in hostSolids)
+            {
+                try
+                {
+                    Solid inter = BooleanOperationsUtils.ExecuteBooleanOperation(prism, hs, BooleanOperationsType.Intersect);
+                    if (inter != null && inter.Volume > 1e-9) result.Add(inter);
+                }
+                catch { /* boolean failed on this part: try the others */ }
+            }
+            return result;
+        }
+
+        /// <summary>A point of the overlap lying on the host face (its face on that plane), or null.</summary>
+        private static XYZ PointOnFace(PlanarFace pf, List<Solid> overlap)
+        {
+            foreach (Solid s in overlap)
+                foreach (Face f in s.Faces)
+                {
+                    if (!(f is PlanarFace of) || of.FaceNormal.DotProduct(pf.FaceNormal) < 0.999) continue;
+                    if (Math.Abs((of.Origin - pf.Origin).DotProduct(pf.FaceNormal)) > 1e-6) continue;
+                    XYZ p = InsidePoint(of);
+                    if (p != null && pf.Project(p) != null) return p;
+                }
+            return null;
+        }
+
+        /// <summary>A point inside the face: the middle of its UV box if that is on it, else just inside an edge.</summary>
+        private static XYZ InsidePoint(Face f)
+        {
+            BoundingBoxUV bb = f.GetBoundingBox();
+            UV mid = new UV((bb.Min.U + bb.Max.U) / 2, (bb.Min.V + bb.Max.V) / 2);
+            if (f.IsInside(mid)) return f.Evaluate(mid);
+
+            foreach (EdgeArray loop in f.EdgeLoops)
+                foreach (Edge e in loop)
+                {
+                    UV uv = f.Project(e.Evaluate(0.5))?.UVPoint;
+                    if (uv == null) continue;
+                    UV inside = new UV(uv.U + (mid.U - uv.U) * 0.01, uv.V + (mid.V - uv.V) * 0.01);
+                    if (f.IsInside(inside)) return f.Evaluate(inside);
+                }
+            return null;
         }
 
         /// <summary>"linkInstanceId:elementId" (HostItem.Key) → the element and its link -> host transform.</summary>
@@ -478,25 +605,28 @@ namespace Openings
             return host != null;
         }
 
-        private static List<PlanarFace> PlanarFaces(Element e)
+        /// <summary>The host's planar faces (with references) and its solids, in its own document's coordinates.</summary>
+        private static List<PlanarFace> HostFaces(Element e, out List<Solid> solids)
         {
             List<PlanarFace> faces = new List<PlanarFace>();
+            solids = new List<Solid>();
             GeometryElement geom = e.get_Geometry(new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine });
-            if (geom != null) Collect(geom, faces);
+            if (geom != null) Collect(geom, faces, solids);
             return faces;
         }
 
-        private static void Collect(GeometryElement geom, List<PlanarFace> into)
+        private static void Collect(GeometryElement geom, List<PlanarFace> faces, List<Solid> solids)
         {
             foreach (GeometryObject obj in geom)
             {
                 if (obj is Solid s && s.Volume > 1e-9)
                 {
+                    solids.Add(s);
                     foreach (Face f in s.Faces)
-                        if (f is PlanarFace pf) into.Add(pf);
+                        if (f is PlanarFace pf) faces.Add(pf);
                 }
                 else if (obj is GeometryInstance gi)
-                    Collect(gi.GetInstanceGeometry(), into);
+                    Collect(gi.GetInstanceGeometry(), faces, solids);
             }
         }
     }

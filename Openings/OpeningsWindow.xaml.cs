@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Windows;
@@ -64,7 +65,17 @@ namespace Openings
             };
             UpdateConvertText();
 
-            OpeningsGrid.MouseDoubleClick += (s, e) => { if (OpeningsGrid.SelectedItem != null) SelectRows(); };
+            // Double-click selects the opening in the model — except on the editable height cell, where it starts the edit.
+            OpeningsGrid.MouseDoubleClick += (s, e) =>
+            {
+                if (OpeningsGrid.SelectedItem != null && OpeningsGrid.CurrentColumn != BottomFromFloorColumn) SelectRows();
+            };
+            OpeningsGrid.BeginningEdit += (s, e) =>
+            {
+                // Only a wall opening that is still in the model has a height above the floor.
+                e.Cancel = e.Column != BottomFromFloorColumn || !(e.Row.Item is OpeningRow r) || r.IsDeleted || r.HostType != "Wall";
+            };
+            OpeningsGrid.CellEditEnding += FromFloorEditEnding;
 
             // The model may have changed while the window was in the background.
             Activated += (s, e) => OpeningsSession.Raise(OpeningsAction.Refresh);
@@ -108,6 +119,12 @@ namespace Openings
             StatusText.Text = rows.Count == 1 ? "1 opening" : $"{rows.Count} openings";
         }
 
+        /// <summary>A line after the count (what the last refresh did with openings placed by hand); null for none.</summary>
+        public void SetNote(string note)
+        {
+            if (!string.IsNullOrEmpty(note)) StatusText.Text += "   ·   " + note;
+        }
+
         public void ShowNoProject()
         {
             SourcesDrop.Clear();
@@ -134,6 +151,30 @@ namespace Openings
         }
 
         // ── Actions ───────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// The user's own Bottom from floor: typed in project units (a unit symbol or the * may stay in the text).
+        /// The opening does not move; the floor it is measured from does — set by hand, marked *, locked.
+        /// </summary>
+        private void FromFloorEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+        {
+            if (e.EditAction != DataGridEditAction.Commit || e.Column != BottomFromFloorColumn) return;
+            if (!(e.Row.Item is OpeningRow row) || !(e.EditingElement is TextBox box) || _lengthUnit == null) return;
+
+            string typed = new string((box.Text ?? "").Where(ch => char.IsDigit(ch) || ch == '.' || ch == ',' || ch == '-').ToArray())
+                .Replace(',', '.');
+            string before = new string((row.BottomFromFloor ?? "").Where(ch => char.IsDigit(ch) || ch == '.' || ch == ',' || ch == '-').ToArray())
+                .Replace(',', '.');
+            if (typed.Length == 0 || typed == before ||
+                !double.TryParse(typed, NumberStyles.Float, CultureInfo.InvariantCulture, out double shown))
+            {
+                // Nothing typed, unchanged or not a number: the list is read back, so the cell shows the model's value.
+                OpeningsSession.Raise(OpeningsAction.Refresh);
+                return;
+            }
+            double value = UnitUtils.ConvertToInternalUnits(shown, _lengthUnit);
+            OpeningsSession.Raise(OpeningsAction.SetFromFloor, new List<long> { row.ElementId }, value);
+        }
 
         private void LockBox_Click(object sender, RoutedEventArgs e)
         {

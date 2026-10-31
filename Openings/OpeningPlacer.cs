@@ -116,12 +116,39 @@ namespace Openings
 
             OpeningElements.SetKey(el, ExistingOpening.KeyOf(used, MepFingerprint.Of(_doc, plan.MepIds)));
             if (existing != null && existing.Manual) Set(el, OpeningParams.Locked, 1);   // the old flag lived in the key
+            // On a host's extended faces (a selected pair that does not touch): a whole-view run would find no
+            // crossing and delete it; Lock keeps it while its MEP elements stay where they are.
+            if (plan.Members.Any(m => m.Extended)) Set(el, OpeningParams.Locked, 1);
             Touched.Add(el.Id);
 
             WriteOpeningId(el);
             WriteSize(el, used);
-            WriteElevations(el, used, floor);
+            // A floor the user set by hand stays while the opening is locked; unlocked, the run's own floor replaces it.
+            double? handFloor = existing != null && existing.FloorByHand && existing.Locked ? existing.FloorZ : null;
+            WriteElevations(el, used, floor, handFloor);
             WriteInfo(el, used);
+        }
+
+        /// <summary>
+        /// Inside a transaction. An opening family the user placed by hand (<see cref="OpeningAdopter"/>) gets
+        /// what a placed opening has: an Opening ID (one it already carries is kept if no other opening has it),
+        /// size, elevations, host and MEP data, and Opening Lock. Its geometry is not touched.
+        /// </summary>
+        public void Adopt(Element el, OpeningPlan plan, FloorHit floor, string hostInfo, IEnumerable<long> meps)
+        {
+            Parameter p = el.get_Parameter(OpeningParams.OpeningId.Guid);
+            if (p != null && p.HasValue && !_idOwners.ContainsKey(p.AsInteger()))
+            {
+                _idOwners[p.AsInteger()] = el.Id;
+                _nextId = Math.Max(_nextId, p.AsInteger() + 1);
+            }
+            WriteOpeningId(el);
+            WriteSize(el, plan);
+            WriteElevations(el, plan, floor, null);
+            Set(el, OpeningParams.HostInfo, hostInfo ?? "");
+            Set(el, OpeningParams.MepInfo, string.Join(", ", meps));
+            Set(el, OpeningParams.Locked, 1);
+            Touched.Add(el.Id);
         }
 
         /// <summary>Inside a transaction, after every Place: removes openings the matcher found superseded or stale.</summary>
@@ -225,7 +252,7 @@ namespace Openings
             }
         }
 
-        private void WriteElevations(Element ds, OpeningPlan plan, FloorHit floor)
+        private void WriteElevations(Element ds, OpeningPlan plan, FloorHit floor, double? handFloor)
         {
             double bottom = plan.BottomZ;
             double center = plan.Center.Z;
@@ -238,17 +265,26 @@ namespace Openings
             Level level = _levels.LastOrDefault(l => l.ProjectElevation <= center + 1e-6) ?? _levels.FirstOrDefault();
             Set(ds, OpeningParams.LevelName, level?.Name ?? "");
 
-            if (plan.Kind == HostKind.Wall && floor != null)
+            if (plan.Kind == HostKind.Wall && handFloor.HasValue)
+            {
+                Set(ds, OpeningParams.BottomFromFloor, bottom - handFloor.Value);
+                Set(ds, OpeningParams.CenterFromFloor, center - handFloor.Value);
+                Set(ds, OpeningParams.FloorInfo, OpeningSync.ByHandText);
+                OpeningSync.StoreFloor(ds, handFloor, true);
+            }
+            else if (plan.Kind == HostKind.Wall && floor != null)
             {
                 Set(ds, OpeningParams.BottomFromFloor, bottom - floor.Z);
                 Set(ds, OpeningParams.CenterFromFloor, center - floor.Z);
                 Set(ds, OpeningParams.FloorInfo, floor.Describe);
+                OpeningSync.StoreFloor(ds, floor.Z, false);
             }
             else
             {
                 Clear(ds, OpeningParams.BottomFromFloor);
                 Clear(ds, OpeningParams.CenterFromFloor);
                 Clear(ds, OpeningParams.FloorInfo);
+                OpeningSync.StoreFloor(ds, null, false);
                 if (plan.Kind == HostKind.Wall) NoFloorFound++;
             }
         }

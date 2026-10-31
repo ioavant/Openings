@@ -23,6 +23,8 @@ namespace Openings
         public bool Locked;                            // Opening Lock: a whole-view run leaves it alone
         public bool Pinned;                            // pinned in Revit: no run touches it
         public string Geo;                             // MepFingerprint of its MEP elements when last placed; null on older openings
+        public double? FloorZ;                         // the floor its "from floor" heights are measured from; null if unknown
+        public bool FloorByHand;                       // that floor was set by the user (a height typed in): kept while locked
 
         public static List<ExistingOpening> Collect(Document doc)
         {
@@ -51,6 +53,10 @@ namespace Openings
                     }
                     else if (part == "manual=1") e.Manual = true;
                     else if (part.StartsWith("geo=")) e.Geo = part.Substring(4);
+                    else if (part.StartsWith(OpeningSync.FloorPart + "=") &&
+                             double.TryParse(part.Substring(OpeningSync.FloorPart.Length + 1), NumberStyles.Float, CultureInfo.InvariantCulture, out double fz))
+                        e.FloorZ = fz;
+                    else if (part == OpeningSync.ByHandPart + "=1") e.FloorByHand = true;
                 }
                 if (e.HostKey != null && e.Meps.Count == 0) e.HostKey = null;
                 if (e.XDir == null && el is FamilyInstance fi) e.XDir = fi.HandOrientation;

@@ -37,7 +37,7 @@
         <TextBlock Grid.Row="1" x:Name="ListLabel" Text="Openings" FontWeight="SemiBold" FontSize="12" Margin="0,12,0,4"/>
 
         <DataGrid Grid.Row="2" x:Name="OpeningsGrid"
-                  AutoGenerateColumns="False" IsReadOnly="True"
+                  AutoGenerateColumns="False" IsReadOnly="False"
                   CanUserAddRows="False" CanUserDeleteRows="False" CanUserReorderColumns="False" CanUserResizeRows="False"
                   SelectionMode="Extended" SelectionUnit="FullRow"
                   GridLinesVisibility="All" HeadersVisibility="Column"
@@ -52,17 +52,18 @@
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
-                <DataGridTextColumn Header="ID" Binding="{Binding OpeningId}" Width="50"/>
-                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="60"/>
-                <DataGridTextColumn Header="Type" Binding="{Binding Kind}" Width="75"/>
-                <DataGridTextColumn Header="Host" Binding="{Binding HostType}" Width="55"/>
-                <DataGridTextColumn Header="Shape" Binding="{Binding Shape}" Width="85"/>
-                <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="110"/>
-                <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="90"/>
-                <DataGridTextColumn Header="Bottom from floor" Binding="{Binding BottomFromFloor}" Width="115"/>
-                <DataGridTextColumn Header="Host element" Binding="{Binding Host}" Width="180"/>
-                <DataGridTextColumn Header="Floor below" Binding="{Binding Floor}" Width="150"/>
-                <DataGridTextColumn Header="MEP elements" Binding="{Binding Mep}" Width="*"/>
+                <DataGridTextColumn Header="ID" Binding="{Binding OpeningId}" Width="50" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="60" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Type" Binding="{Binding Kind}" Width="75" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Host" Binding="{Binding HostType}" Width="55" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Shape" Binding="{Binding Shape}" Width="85" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Size" Binding="{Binding Size}" Width="110" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Level" Binding="{Binding Level}" Width="90" IsReadOnly="True"/>
+                <!-- The one editable cell (wall openings): the user's own height, kept while locked, shown with * -->
+                <DataGridTextColumn x:Name="BottomFromFloorColumn" Header="Bottom from floor" Binding="{Binding BottomFromFloor}" Width="115"/>
+                <DataGridTextColumn Header="Host element" Binding="{Binding Host}" Width="180" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Floor below" Binding="{Binding Floor}" Width="150" IsReadOnly="True"/>
+                <DataGridTextColumn Header="MEP elements" Binding="{Binding Mep}" Width="*" IsReadOnly="True"/>
             </DataGrid.Columns>
         </DataGrid>
 

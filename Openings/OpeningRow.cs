@@ -52,7 +52,7 @@ namespace Openings
                     Shape = shape,
                     Size = size,
                     Level = Text(ds, OpeningParams.LevelName),
-                    BottomFromFloor = Len(Number(ds, OpeningParams.BottomFromFloor)),
+                    BottomFromFloor = Len(Number(ds, OpeningParams.BottomFromFloor)) + (e.FloorByHand ? " *" : ""),
                     Host = Text(ds, OpeningParams.HostInfo),
                     Floor = Text(ds, OpeningParams.FloorInfo),
                     Mep = Text(ds, OpeningParams.MepInfo)
