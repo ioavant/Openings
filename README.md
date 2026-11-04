@@ -1,5 +1,13 @@
 # Vixeldorf Openings
 
+Revit 2022–2027 add-in: openings where ducts, pipes, cable trays and shafts cross walls and slabs,
+kept up to date as the MEP model changes. Download: [latest release](https://github.com/ioavant/Openings/releases/latest).
+
+Full product description: [docs/product-facts.md](docs/product-facts.md) ·
+App Store listing: [docs/appstore-listing.md](docs/appstore-listing.md).
+
+---
+
 Ставит отверстия (Generic Model) там, где воздуховоды / трубы / лотки / короба
 пересекают стены, балки, перекрытия, крыши и потолки из выбранных линков (или текущей модели).
 
