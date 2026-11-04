@@ -117,13 +117,21 @@ namespace Openings
         private static readonly Dictionary<string, Dictionary<long, DeletedOpening>> _known =
             new Dictionary<string, Dictionary<long, DeletedOpening>>();
 
-        /// <summary>From an API context with an add-in id (the command). Registers once per session.</summary>
+        /// <summary>
+        /// From an API context with an add-in id (the command). Once per load of this assembly: an updater with the
+        /// same id already registered is an earlier load of it (Add-in Manager loads every build as a new copy) and
+        /// still runs that build's code, so it is replaced.
+        /// </summary>
         public static void Register(AddInId addInId)
         {
             if (_id != null) return;
             OpeningUpdater u = new OpeningUpdater(addInId);
             _id = u.GetUpdaterId();
-            if (UpdaterRegistry.IsUpdaterRegistered(_id)) return;
+            if (UpdaterRegistry.IsUpdaterRegistered(_id))
+            {
+                try { UpdaterRegistry.UnregisterUpdater(_id); }
+                catch { return; }   // registered by someone it cannot be taken from: leave it
+            }
 
             // Optional: a project opened on a machine without the add-in raises no warning.
             UpdaterRegistry.RegisterUpdater(u, true);
@@ -149,6 +157,14 @@ namespace Openings
         public static void Remember(Document doc, Dictionary<long, DeletedOpening> openings) =>
             _known[doc.Title] = openings;
 
+        // Per document (by title): the openings locked as last seen, to tell "the user cleared Opening Lock"
+        // (keep it cleared) from "the user changed an unlocked opening" (lock it).
+        private static readonly Dictionary<string, HashSet<long>> _lockedSeen = new Dictionary<string, HashSet<long>>();
+
+        /// <summary>Remembers which openings are locked now (refreshed with the palette list).</summary>
+        public static void RememberLocks(Document doc, IEnumerable<long> locked) =>
+            _lockedSeen[doc.Title] = new HashSet<long>(locked);
+
         private readonly UpdaterId _myId;
 
         private OpeningUpdater(AddInId addInId)
@@ -162,12 +178,21 @@ namespace Openings
             Document doc = data.GetDocument();
 
             OpeningSync sync = null;
+            _lockedSeen.TryGetValue(doc.Title, out HashSet<long> seen);
             foreach (ElementId id in data.GetModifiedElementIds())
             {
                 Element el = doc.GetElement(id);
                 if (el == null || !OpeningElements.IsOpening(el)) continue;
+                // Changed by hand → Opening Lock. Except when the change is clearing Opening Lock itself
+                // (it was locked, now it is not): that is the user's choice and stays.
                 Parameter p = el.get_Parameter(OpeningParams.Locked.Guid);
-                if (p != null && !p.IsReadOnly && p.AsInteger() != 1) p.Set(1);
+                if (p != null && !p.IsReadOnly)
+                {
+                    long key = id.GetValue();
+                    bool lockCleared = p.AsInteger() != 1 && seen != null && seen.Remove(key);
+                    if (p.AsInteger() != 1 && !lockCleared) p.Set(1);
+                    if (p.AsInteger() == 1) seen?.Add(key);
+                }
                 // Resized with its grips, moved, rotated: the Opening … parameters follow at once.
                 if (sync == null) sync = new OpeningSync(doc, OpeningsSession.Settings ?? OpeningSettings.Load());
                 sync.Refresh(el);

@@ -69,6 +69,7 @@ namespace Openings
                     };
             }
             OpeningUpdater.Remember(doc, known);
+            OpeningUpdater.RememberLocks(doc, rows.Where(r => r.IsLocked).Select(r => r.ElementId));
 
             // Openings the user deleted: listed (locked) so they can be unlocked and come back.
             foreach (DeletedOpening d in DeletedOpenings.Read(doc))
