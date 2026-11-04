@@ -16,23 +16,21 @@ App Store listing: [docs/appstore-listing.md](docs/appstore-listing.md).
 - `version.json` — единственный источник версии (DLL, MSI, проверка обновлений в окне).
 - Бренд и GUID — `branding.props` + общий движок `..\_branding` (только Vixeldorf).
 - `dotnet build -c Release` в `Openings\` — две сборки: `bin\Release\Vixeldorf\Openings.dll` (net48, Revit 2022–2024, API 2022)
-  и `bin\Release\Vixeldorf
-et8\Openings.dll` (net8, Revit 2025+, API 2025.0.2 из NuGet).
+  и `bin\Release\Vixeldorf\net8\Openings.dll` (net8, Revit 2025+, API 2025.0.2 из NuGet).
 - Установщик (WiX 3, нужен MSBuild из Visual Studio):
   `MSBuild Installer\Installer.wixproj /p:Configuration=Release /p:Platform=x64` →
-  `Installerin\Release\Vixeldorf\Openings_Setup_Vixeldorf.msi`. Ставит в `C:\ProgramData\Vixeldorf\Openings`,
-  манифесты 2022–2026 в `ProgramData\Autodesk\Revit\Addins\<год>`, 2027 — в `Program Files\Autodesk\Revit\Addins7`.
+  `Installer\bin\Release\Vixeldorf\Openings_Setup_Vixeldorf.msi`. Ставит в `C:\ProgramData\Vixeldorf\Openings`,
+  манифесты 2022–2026 в `ProgramData\Autodesk\Revit\Addins\<год>`, 2027 — в `Program Files\Autodesk\Revit\Addins\2027`.
 - Лента: вкладка Vixeldorf → панель Openings → Openings (`App.cs`); трекер (IUpdater) регистрируется при старте Revit.
 - Релизы: https://github.com/ioavant/Openings/releases; окно показывает баннер, если в `version.json` ветки `main` версия новее.
-- Тексты для сайта и App Store — `docs\product-facts.md`, `docsppstore-listing.md`.
+- Тексты для сайта и App Store — `docs\product-facts.md`, `docs\appstore-listing.md`.
 
 ## Тест через Add-in Manager
 
 1. `dotnet build -c Debug` в папке `Openings\`.
 2. Add-in Manager → Load → команда `Openings.OpeningsCommand`:
-   - Revit 2022–2024: `Openingsin\Debug\Vixeldorf\Openings.dll`;
-   - Revit 2025+: `Openingsin\Debug\Vixeldorf
-et8\Openings.dll`.
+   - Revit 2022–2024: `Openings\bin\Debug\Vixeldorf\Openings.dll`;
+   - Revit 2025+: `Openings\bin\Debug\Vixeldorf\net8\Openings.dll`.
    Перед загрузкой новой сборки закрыть палитру — открытая продолжает работать старым кодом.
 
 Отличия версий:
