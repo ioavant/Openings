@@ -1,0 +1,58 @@
+<Project>
+
+  <!--
+    Openings — product side of the branding configuration.
+
+    What a BRAND is (ribbon tab, About button, help URL, installer artwork,
+    update policy) lives in ..\_branding\<Brand>\brand.props and is shared by
+    every add-in. This file only describes THIS product.
+
+    This product ships under Vixeldorf only. The engine still honours
+    -p:Brand=Tes, but no TES GUID block is configured below, so a TES build
+    would fail fast (by design) rather than ship half-branded.
+  -->
+
+  <PropertyGroup>
+    <BrandProduct>Openings</BrandProduct>
+    <BrandProductDisplayName>Openings</BrandProductDisplayName>
+    <BrandProductDescription>Place, update and track openings where ducts, pipes, cable trays and shafts cross walls and floors, from links or the current model.</BrandProductDescription>
+
+    <!-- Namespace the generated Brand class is emitted into. -->
+    <BrandInfoNamespace>Openings</BrandInfoNamespace>
+    <!-- IExternalApplication class the .addin manifests point at. -->
+    <BrandAppClassName>Openings.App</BrandAppClassName>
+
+    <BrandSupportedRevitVersions>2022;2023;2024;2025;2026;2027</BrandSupportedRevitVersions>
+    <!-- Revit 2025+ load the net8.0-windows assembly; 2022-2024 keep net48. -->
+    <BrandNet8MinRevitVersion>2025</BrandNet8MinRevitVersion>
+
+    <!-- The add-in project folder; the engine derives the built DLL path from it. -->
+    <BrandProjectDir>$(MSBuildThisFileDirectory)Openings\</BrandProjectDir>
+
+    <!-- Auto-generated per install location. -->
+    <BrandCoreFilesGuid>*</BrandCoreFilesGuid>
+  </PropertyGroup>
+
+  <!-- ================================================================= -->
+  <!-- Vixeldorf — the only brand this product ships. Fresh GUIDs, never  -->
+  <!-- shared with another product. UpgradeCode and AddInId must never    -->
+  <!-- change once released: they are how later MSIs upgrade in place and -->
+  <!-- how Revit identifies the add-in.                                   -->
+  <!-- ================================================================= -->
+  <PropertyGroup Condition=" '$(Brand)' == 'Vixeldorf' ">
+    <BrandRibbonPanel>Openings</BrandRibbonPanel>
+
+    <BrandUpgradeCode>1825D837-36D4-4FFF-9CAD-D3759DAA2AB6</BrandUpgradeCode>
+    <BrandAddInId>20AA3089-5947-4432-8176-3B329A15A80E</BrandAddInId>
+  </PropertyGroup>
+
+  <ItemGroup Condition=" '$(Brand)' == 'Vixeldorf' ">
+    <BrandAddinComponent Include="2022"><Guid>6ACCB75B-412D-4776-9796-733CB671B3BF</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2023"><Guid>D0A866CB-496C-4C7F-9746-B4BF1F427BFA</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2024"><Guid>90E97460-BB88-46F4-8150-51B08D58D752</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2025"><Guid>11DFE76A-0D6E-4755-826A-A87E22D60E89</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2026"><Guid>6E58CBC0-0AF8-4DBC-AED5-6D17E0B4BD89</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2027"><Guid>C08E9934-3824-41B4-9086-CC3FC094F717</Guid></BrandAddinComponent>
+  </ItemGroup>
+
+</Project>

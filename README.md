@@ -1,14 +1,31 @@
-# Openings — прототип
+# Vixeldorf Openings
 
 Ставит отверстия (Generic Model) там, где воздуховоды / трубы / лотки / короба
 пересекают стены, балки, перекрытия, крыши и потолки из выбранных линков (или текущей модели).
 
+## Сборка и установка
+
+- `version.json` — единственный источник версии (DLL, MSI, проверка обновлений в окне).
+- Бренд и GUID — `branding.props` + общий движок `..\_branding` (только Vixeldorf).
+- `dotnet build -c Release` в `Openings\` — две сборки: `bin\Release\Vixeldorf\Openings.dll` (net48, Revit 2022–2024, API 2022)
+  и `bin\Release\Vixeldorf
+et8\Openings.dll` (net8, Revit 2025+, API 2025.0.2 из NuGet).
+- Установщик (WiX 3, нужен MSBuild из Visual Studio):
+  `MSBuild Installer\Installer.wixproj /p:Configuration=Release /p:Platform=x64` →
+  `Installerin\Release\Vixeldorf\Openings_Setup_Vixeldorf.msi`. Ставит в `C:\ProgramData\Vixeldorf\Openings`,
+  манифесты 2022–2026 в `ProgramData\Autodesk\Revit\Addins\<год>`, 2027 — в `Program Files\Autodesk\Revit\Addins7`.
+- Лента: вкладка Vixeldorf → панель Openings → Openings (`App.cs`); трекер (IUpdater) регистрируется при старте Revit.
+- Релизы: https://github.com/ioavant/Openings/releases; окно показывает баннер, если в `version.json` ветки `main` версия новее.
+- Тексты для сайта и App Store — `docs\product-facts.md`, `docsppstore-listing.md`.
+
 ## Тест через Add-in Manager
 
-1. `dotnet build -c Debug` в папке `Openings\` — собираются обе половины (для net48 нужен установленный Revit 2022).
-2. Add-in Manager → Load → команда `Openings.OpeningsCommand` (открывает главное окно):
-   - Revit 2022–2024: `Openings\bin\Debug\Openings.dll` (net48, API 2022);
-   - Revit 2025+: `Openings\bin\Debug\net8\Openings.dll` (net8, API 2025.0.2 из NuGet).
+1. `dotnet build -c Debug` в папке `Openings\`.
+2. Add-in Manager → Load → команда `Openings.OpeningsCommand`:
+   - Revit 2022–2024: `Openingsin\Debug\Vixeldorf\Openings.dll`;
+   - Revit 2025+: `Openingsin\Debug\Vixeldorf
+et8\Openings.dll`.
+   Перед загрузкой новой сборки закрыть палитру — открытая продолжает работать старым кодом.
 
 Отличия версий:
 - Элементы линка, видимые на виде: в Revit 2024+ — точный коллектор `(doc, view, link)`; в 2022/2023 его нет,
@@ -52,7 +69,10 @@
 - **Pinned** (закреплено в Revit, статус *Pinned* в списке) — исключение: ни один запуск (и по виду, и по
   выделенным) его не меняет и не удаляет, даже если элементы сдвинулись.
 - Lock ставится автоматически: Edit, любое изменение отверстия руками в Revit (перемещение, параметры…) —
-  через IUpdater (регистрируется при открытии палитры, опциональный: без аддина проект открывается без предупреждений).
+  через IUpdater (регистрируется при старте Revit, а через Add-in Manager — при открытии палитры; опциональный: без аддина проект открывается без предупреждений).
+  Исключение — само снятие галочки Opening Lock в свойствах: оно остается (трекер помнит, какие отверстия были
+  заблокированы при последнем обновлении списка). При каждой загрузке сборки трекер перерегистрируется — иначе
+  после перезагрузки DLL в Add-in Manager продолжал бы работать код прошлой сборки.
 - Отверстие, **удаленное** пользователем (в Revit или кнопкой Delete), запоминается в проекте (DataStorage) и
   показывается в списке со статусом *Deleted* и Lock. Запуск по виду его не создает заново; снять Lock — забыть
   удаление (следующий запуск создаст); запуск по выделенным элементам создает его и тоже забывает удаление.
@@ -198,8 +218,3 @@ Generic Models — отдельный пункт: шахты ShaftMaster (и п�
 | Opening Bottom / Center Elevation SP | общие координаты (Survey Point) |
 | Opening Floor | стены: в какой пол/крышу попал луч — `<модель> : <категория> <id> — <тип>`; `* set by hand`, если высота задана руками |
 | Opening Host, Opening MEP Elements, Opening Shape, Opening Host Type, Opening Level | текст |
-
-
-## Что дальше (после прототипа)
-
-branding.props + App.cs/лента + инсталлятор — как в Link Section Box.

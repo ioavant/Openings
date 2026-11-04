@@ -1,0 +1,295 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+	<!--
+	  Brand-neutral. Every name, path, artwork file and GUID below comes from
+	  brand.generated.wxi, which the GenerateBrandWxi target writes into this
+	  folder on each build from ..\..\_branding\<Brand>\brand.props plus
+	  ..\branding.props. Build with:
+
+	      MSBuild Installer.wixproj /p:Configuration=Release /p:Brand=Vixeldorf
+
+	  The include is referenced by bare filename on purpose: these paths sit
+	  under "Revit Addins" and a candle -d switch would have to fight the space.
+	-->
+	<?include brand.generated.wxi ?>
+
+	<Product
+	  Id="*"
+	  Name="$(var.FullProductName)"
+	  Language="1033"
+	  Version="!(bind.FileVersion.MainDll)"
+	  Manufacturer="$(var.Manufacturer)"
+	  UpgradeCode="$(var.UpgradeCode)">
+
+		<Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+
+		<!-- Upgrade.
+		     AllowSameVersionUpgrades makes the version range inclusive of the
+		     current version. Without it MajorUpgrade only supersedes versions
+		     strictly below this one, so reinstalling the same version lands a
+		     SECOND product beside the first — two manifests, one AddInId, and
+		     Revit refuses the add-in with "Duplicated AddInId". Costs an ICE61
+		     warning, suppressed in Installer.wixproj. -->
+		<MajorUpgrade AllowSameVersionUpgrades="yes"
+		              DowngradeErrorMessage="A newer version is already installed." />
+
+		<MediaTemplate EmbedCab="yes" />
+
+		<UIRef Id="WixUI_FeatureTree"/>
+		<UIRef Id="WixUI_ErrorProgressText"/>
+
+		<WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)"/>
+		<WixVariable Id="WixUIBannerBmp" Value="$(var.BannerBmp)"/>
+		<WixVariable Id="WixUIDialogBmp" Value="$(var.DialogBmp)"/>
+
+		<!-- ================== UI CHECKBOXES ================== -->
+		<Property Id="REVIT2022" Value="1"/>
+		<Property Id="REVIT2023" Value="1"/>
+		<Property Id="REVIT2024" Value="1"/>
+		<Property Id="REVIT2025" Value="1"/>
+		<Property Id="REVIT2026" Value="1"/>
+		<Property Id="REVIT2027" Value="1"/>
+
+		<!-- ================== DIRECTORIES ================== -->
+		<Directory Id="TARGETDIR" Name="SourceDir">
+			<Directory Id="CommonAppDataFolder">
+				<!-- %ProgramData%\<brand>\<product> -->
+				<Directory Id="BRANDROOTDIR" Name="$(var.InstallRoot)">
+					<Directory Id="PRODUCTDIR" Name="$(var.ProductFolder)">
+						<Component Id="CoreFiles" Guid="$(var.CoreFilesGuid)">
+							<File Id="MainDll" Source="$(var.MainDllPath)"/>
+						</Component>
+						<?if $(var.HasNet8) = "1" ?>
+						<!-- net8.0-windows build for Revit 2025+; the 2025+ manifests point here. -->
+						<Directory Id="NET8DIR" Name="net8">
+							<Component Id="CoreFilesNet8" Guid="*">
+								<File Id="MainDllNet8" Source="$(var.MainDllNet8Path)"/>
+							</Component>
+						</Directory>
+						<?endif?>
+					</Directory>
+				</Directory>
+
+				<!-- Revit addin folders. The manifest file names carry a brand
+				     prefix so builds of different brands can sit side by side
+				     in the same Addins folder instead of overwriting each other. -->
+				<Directory Id="Autodesk" Name="Autodesk">
+					<Directory Id="Revit" Name="Revit">
+						<Directory Id="Addins" Name="Addins">
+
+							<Directory Id="R2022" Name="2022">
+								<Component Id="Addin2022" Guid="$(var.Addin2022Guid)">
+									<Condition>REVIT2022=1</Condition>
+									<File Id="Addin2022File" Source="$(var.AddinDir)$(var.AddinFileStem)_22.addin"/>
+								</Component>
+							</Directory>
+
+							<Directory Id="R2023" Name="2023">
+								<Component Id="Addin2023" Guid="$(var.Addin2023Guid)">
+									<Condition>REVIT2023=1</Condition>
+									<File Id="Addin2023File" Source="$(var.AddinDir)$(var.AddinFileStem)_23.addin"/>
+								</Component>
+							</Directory>
+
+							<Directory Id="R2024" Name="2024">
+								<Component Id="Addin2024" Guid="$(var.Addin2024Guid)">
+									<Condition>REVIT2024=1</Condition>
+									<File Id="Addin2024File" Source="$(var.AddinDir)$(var.AddinFileStem)_24.addin"/>
+								</Component>
+							</Directory>
+
+							<Directory Id="R2025" Name="2025">
+								<Component Id="Addin2025" Guid="$(var.Addin2025Guid)">
+									<Condition>REVIT2025=1</Condition>
+									<File Id="Addin2025File" Source="$(var.AddinDir)$(var.AddinFileStem)_25.addin"/>
+								</Component>
+							</Directory>
+
+							<Directory Id="R2026" Name="2026">
+								<Component Id="Addin2026" Guid="$(var.Addin2026Guid)">
+									<Condition>REVIT2026=1</Condition>
+									<File Id="Addin2026File" Source="$(var.AddinDir)$(var.AddinFileStem)_26.addin"/>
+								</Component>
+							</Directory>
+
+						</Directory>
+					</Directory>
+				</Directory>
+			</Directory>
+
+			<!-- Revit 2027 no longer scans ProgramData for machine-wide add-in manifests.
+			     Third-party shared add-ins now live under Program Files\Autodesk\Revit\Addins\2027. -->
+			<Directory Id="ProgramFiles64Folder">
+				<Directory Id="AutodeskPF" Name="Autodesk">
+					<Directory Id="RevitPF" Name="Revit">
+						<Directory Id="AddinsPF" Name="Addins">
+							<Directory Id="R2027PF" Name="2027">
+								<Component Id="Addin2027" Guid="$(var.Addin2027Guid)" Win64="yes">
+									<Condition>REVIT2027=1</Condition>
+									<File Id="Addin2027File" Source="$(var.AddinDir)$(var.AddinFileStem)_27.addin"/>
+								</Component>
+							</Directory>
+						</Directory>
+					</Directory>
+				</Directory>
+			</Directory>
+		</Directory>
+
+		<!-- ================== FEATURES ================== -->
+		<Feature Id="MainFeature"
+			 Title="$(var.FullProductName)"
+			 Level="1"
+			 Display="expand">
+
+			<ComponentRef Id="CoreFiles"/>
+			<?if $(var.HasNet8) = "1" ?>
+			<ComponentRef Id="CoreFilesNet8"/>
+			<?endif?>
+
+			<Feature Id="Revit2022Feature"
+	                 Title="Revit 2022"
+	                 Level="1"
+	                 Absent="allow">
+				<ComponentRef Id="Addin2022"/>
+			</Feature>
+
+			<Feature Id="Revit2023Feature"
+					 Title="Revit 2023"
+					 Level="1"
+					 Absent="allow">
+				<ComponentRef Id="Addin2023"/>
+			</Feature>
+
+			<Feature Id="Revit2024Feature"
+					 Title="Revit 2024"
+					 Level="1"
+					 Absent="allow">
+				<ComponentRef Id="Addin2024"/>
+			</Feature>
+
+			<Feature Id="Revit2025Feature"
+					 Title="Revit 2025"
+					 Level="1"
+					 Absent="allow">
+				<ComponentRef Id="Addin2025"/>
+			</Feature>
+
+			<Feature Id="Revit2026Feature"
+					 Title="Revit 2026"
+					 Level="1"
+					 Absent="allow">
+				<ComponentRef Id="Addin2026"/>
+			</Feature>
+
+			<Feature Id="Revit2027Feature"
+					 Title="Revit 2027"
+					 Level="1"
+					 Absent="allow">
+				<ComponentRef Id="Addin2027"/>
+			</Feature>
+		</Feature>
+
+	</Product>
+
+	<!-- ================== REVIT VERSION SELECTION DIALOG ================== -->
+	<Fragment>
+		<UI>
+			<Dialog Id="RevitSelectionDlg"
+					Width="370"
+					Height="270"
+					Title="Select Revit Versions">
+
+				<Control Id="Title"
+						 Type="Text"
+						 X="15" Y="6"
+						 Width="340" Height="15"
+						 Transparent="yes"
+						 NoPrefix="yes"
+						 Text="Select Revit versions to install the add-in:"/>
+
+				<Control Id="Revit2022"
+						 Type="CheckBox"
+						 X="20" Y="40"
+						 Width="200" Height="17"
+						 Property="REVIT2022"
+						 CheckBoxValue="1"
+						 Text="Revit 2022"/>
+
+				<Control Id="Revit2023"
+						 Type="CheckBox"
+						 X="20" Y="60"
+						 Width="200" Height="17"
+						 Property="REVIT2023"
+						 CheckBoxValue="1"
+						 Text="Revit 2023"/>
+
+				<Control Id="Revit2024"
+						 Type="CheckBox"
+						 X="20" Y="80"
+						 Width="200" Height="17"
+						 Property="REVIT2024"
+						 CheckBoxValue="1"
+						 Text="Revit 2024"/>
+
+				<Control Id="Revit2025"
+						 Type="CheckBox"
+						 X="20" Y="100"
+						 Width="200" Height="17"
+						 Property="REVIT2025"
+						 CheckBoxValue="1"
+						 Text="Revit 2025"/>
+
+				<Control Id="Revit2026"
+						 Type="CheckBox"
+						 X="20" Y="120"
+						 Width="200" Height="17"
+						 Property="REVIT2026"
+						 CheckBoxValue="1"
+						 Text="Revit 2026"/>
+
+				<Control Id="Revit2027"
+						 Type="CheckBox"
+						 X="20" Y="140"
+						 Width="200" Height="17"
+						 Property="REVIT2027"
+						 CheckBoxValue="1"
+						 Text="Revit 2027"/>
+
+				<Control Id="Next"
+						 Type="PushButton"
+						 X="236" Y="243"
+						 Width="56" Height="17"
+						 Default="yes"
+						 Text="Next">
+					<Publish Event="NewDialog" Value="VerifyReadyDlg">1</Publish>
+				</Control>
+
+				<Control Id="Back"
+						 Type="PushButton"
+						 X="180" Y="243"
+						 Width="56" Height="17"
+						 Text="Back">
+					<Publish Event="NewDialog" Value="WelcomeDlg">1</Publish>
+				</Control>
+
+				<Control Id="Cancel"
+						 Type="PushButton"
+						 X="304" Y="243"
+						 Width="56" Height="17"
+						 Cancel="yes"
+						 Text="Cancel">
+					<Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+				</Control>
+
+			</Dialog>
+
+			<Publish Dialog="WelcomeDlg"
+					 Control="Next"
+					 Event="NewDialog"
+					 Value="RevitSelectionDlg">1</Publish>
+
+		</UI>
+	</Fragment>
+
+</Wix>

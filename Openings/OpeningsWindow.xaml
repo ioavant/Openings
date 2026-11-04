@@ -21,7 +21,12 @@
         </Grid.RowDefinitions>
 
         <!-- Which models the walls / floors come from -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal">
+        <StackPanel Grid.Row="0">
+        <Border x:Name="UpdateBanner" Visibility="Collapsed" Cursor="Hand" Margin="0,0,0,10" Padding="8,5"
+                Background="#FFFFF9DB" BorderBrush="#FFE8D98A" BorderThickness="1">
+            <TextBlock x:Name="UpdateBannerText" TextWrapping="Wrap" Foreground="#FF6B5A10"/>
+        </Border>
+        <StackPanel Orientation="Horizontal">
             <TextBlock Text="Walls / floors from:" FontWeight="SemiBold" FontSize="12"
                        VerticalAlignment="Center" Margin="0,0,8,0"/>
             <local:CheckDropDown x:Name="SourcesDrop" Width="380"/>
@@ -32,6 +37,7 @@
                 <ComboBoxItem Content="Generic Model (DirectShape)"/>
                 <ComboBoxItem Content="Family (face-based)"/>
             </ComboBox>
+        </StackPanel>
         </StackPanel>
 
         <TextBlock Grid.Row="1" x:Name="ListLabel" Text="Openings" FontWeight="SemiBold" FontSize="12" Margin="0,12,0,4"/>

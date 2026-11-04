@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <_BrandingPropsImported Condition=" '$(_BrandingPropsImported)' == '' ">false</_BrandingPropsImported>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(_BrandingPropsImported)' == 'false' ">
+    <!-- Vixeldorf is the only brand this product ships. (The engine still allows
+         -p:Brand=Tes, but no TES GUID block is configured in branding.props.) -->
+    <Brand Condition=" '$(Brand)' == '' ">Vixeldorf</Brand>
+  </PropertyGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)branding.props"
+          Condition=" '$(_BrandingPropsImported)' == 'false' " />
+  <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)', '_branding\Branding.props'))\_branding\Branding.props"
+          Condition=" '$(_BrandingPropsImported)' == 'false' " />
+</Project>

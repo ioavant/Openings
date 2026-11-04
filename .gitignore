@@ -366,3 +366,8 @@ FodyWeavers.xsd
 Ceiling Attach/Properties/BrandInfo.cs
 Ceiling Attach/Properties/VersionInfo.cs
 Installer/brand.generated.wxi
+# ── Branding / version: generated at build time, never committed ──
+Openings/Properties/BrandInfo.cs
+Openings/Properties/VersionInfo.cs
+Installer/brand.generated.wxi
+Installer/obj/addins/

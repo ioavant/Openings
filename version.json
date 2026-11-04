@@ -1,0 +1,5 @@
+{
+  "version": "1.0.0",
+  "downloadUrl": "https://github.com/ioavant/Openings/releases/download/v1.0.0/OpeningsSetup.msi",
+  "releaseNotes": "First release: openings as Generic Model DirectShapes or face-based families, sketch editing, Lock, tracking of MEP moves and deletions."
+}

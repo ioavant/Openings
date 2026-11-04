@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" InitialTargets="EnsureWixToolsetInstalled" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- A .wixproj does not import Microsoft.Common.props, so Directory.Build.props
+       has to be pulled in by hand; it is what defines $(Brand) and everything the
+       branding engine derives from it. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props"
+          Condition=" '$(_BrandingPropsImported)' != 'true' " />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <!-- x64: in an x86 package ProgramFiles64Folder resolves to Program Files (x86),
+         which is not where Revit 2027 looks for add-in manifests. -->
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProductVersion>3.10</ProductVersion>
+    <ProjectGuid>286131DD-3DFB-4E19-AA30-103CBAA997F1</ProjectGuid>
+    <SchemaVersion>2.0</SchemaVersion>
+    <OutputName>Openings_Setup_$(Brand)</OutputName>
+    <OutputType>Package</OutputType>
+    <!-- ICE61 fires because MajorUpgrade/@AllowSameVersionUpgrades makes the
+         upgrade range overlap this product's own version. That overlap is the
+         point — see the comment in Product.wxs. -->
+    <SuppressIces>ICE61</SuppressIces>
+    <DefineSolutionProperties>false</DefineSolutionProperties>
+  </PropertyGroup>
+  <!-- Brand-scoped so both MSIs can be built back to back. -->
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+    <OutputPath>bin\$(Configuration)\$(Brand)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)\$(Brand)\</IntermediateOutputPath>
+    <DefineConstants>Debug</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
+    <OutputPath>bin\$(Configuration)\$(Brand)\</OutputPath>
+    <IntermediateOutputPath>obj\$(Configuration)\$(Brand)\</IntermediateOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Product.wxs" />
+  </ItemGroup>
+  <ItemGroup>
+    <WixExtension Include="WixUIExtension">
+      <HintPath>$(WixExtDir)\WixUIExtension.dll</HintPath>
+      <Name>WixUIExtension</Name>
+    </WixExtension>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Pinned to one framework: a .wixproj cannot negotiate with a multi-targeted
+         project. Both DLLs are still built, and Product.wxs takes each by path. -->
+    <ProjectReference Include="..\Openings\Openings.csproj">
+      <Name>Openings</Name>
+      <AdditionalProperties>TargetFramework=net48</AdditionalProperties>
+      <Private>True</Private>
+      <DoNotHarvest>True</DoNotHarvest>
+      <RefProjectOutputGroups>Binaries;Content;Satellites</RefProjectOutputGroups>
+      <RefTargetDir>INSTALLFOLDER</RefTargetDir>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(WixTargetsPath)" Condition=" '$(WixTargetsPath)' != '' " />
+  <Import Project="$(MSBuildExtensionsPath32)\Microsoft\WiX\v3.x\Wix.targets" Condition=" '$(WixTargetsPath)' == '' AND Exists('$(MSBuildExtensionsPath32)\Microsoft\WiX\v3.x\Wix.targets') " />
+  <Target Name="EnsureWixToolsetInstalled" Condition=" '$(WixTargetsImported)' != 'true' ">
+    <Error Text="The WiX Toolset v3.11 build tools must be installed to build this project. To download the WiX Toolset, see https://wixtoolset.org/releases/v3.11/stable" />
+  </Target>
+  <!-- Generates the .addin manifests and brand.generated.wxi this project compiles. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.targets"
+          Condition=" '$(_BrandingTargetsImported)' != 'true' " />
+</Project>

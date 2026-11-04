@@ -31,8 +31,21 @@ namespace Openings
             InitializeComponent();
             _settings = settings;
 
-            Version v = Assembly.GetExecutingAssembly().GetName().Version;
-            Title = $"Openings v{v.Major}.{v.Minor}.{v.Build}";
+            Branding.BrandIcon.Apply(this);
+            Title = $"{Brand.FullProductName}  —  v{UpdateChecker.CurrentVersion}";
+            UpdateInfo update = UpdateChecker.AvailableUpdate;
+            if (update != null)
+            {
+                UpdateBannerText.Text = $"Version {update.Version} is available — click to download." +
+                                        (string.IsNullOrEmpty(update.ReleaseNotes) ? "" : $"  ({update.ReleaseNotes})");
+                UpdateBanner.Visibility = System.Windows.Visibility.Visible;
+                UpdateBanner.MouseLeftButtonUp += (s, e) =>
+                {
+                    if (string.IsNullOrEmpty(update.DownloadUrl)) return;
+                    try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(update.DownloadUrl) { UseShellExecute = true }); }
+                    catch { /* no browser — nothing to do */ }
+                };
+            }
 
             SourcesDrop.EmptyText = "(none)";
             SourcesDrop.Changed += SaveSources;

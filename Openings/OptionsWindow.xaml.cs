@@ -53,6 +53,7 @@ namespace Openings
         public OptionsWindow(OpeningSettings settings, ForgeTypeId lengthUnit, List<FamilyChoice> families)
         {
             InitializeComponent();
+            Branding.BrandIcon.Apply(this);
             _settings = settings;
             _lengthUnit = lengthUnit;
             _unitLabel = LabelUtils.GetLabelForUnit(_lengthUnit);

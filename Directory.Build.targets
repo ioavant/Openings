@@ -1,0 +1,4 @@
+<Project>
+  <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)', '_branding\Branding.targets'))\_branding\Branding.targets"
+          Condition=" '$(_BrandingTargetsImported)' != 'true' " />
+</Project>

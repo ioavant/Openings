@@ -1,18 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Openings — PROTOTYPE build. Two assemblies, split at the .NET Framework / .NET boundary:
+    Openings. Two assemblies, split at the .NET Framework / .NET boundary:
 
-        net48           Revit 2022-2024, compiled against the 2022 API   bin\<Config>\Openings.dll
-        net8.0-windows  Revit 2025+,     compiled against the 2025 API   bin\<Config>\net8\Openings.dll
+        net48           Revit 2022-2024, compiled against the 2022 API   bin\<Config>\Vixeldorf\Openings.dll
+        net8.0-windows  Revit 2025+,     compiled against the 2025 API   bin\<Config>\Vixeldorf\net8\Openings.dll
 
-    Tested through Add-in Manager for now. Each half is compiled against the OLDEST
-    release it serves. The net8 half uses the Revit 2025.0.2 reference assemblies from
-    NuGet (see the revit-net8-split skill: a locally installed 2025.5+ RevitAPI is
-    built against .NET 10 and cannot be referenced from net8).
+    Each half is compiled against the OLDEST release it serves. The net8 half uses
+    the Revit 2025.0.2 reference assemblies from NuGet (a locally installed 2025.5+
+    RevitAPI is built against .NET 10 and cannot be referenced from net8).
+    BrandNet8MinRevitVersion in ..\branding.props decides which manifests point
+    at which DLL.
 
-    When the prototype graduates: branding.props / Directory.Build.props, App.cs
-    (vixeldorf-ribbon) and the installer, the same way as Link Section Box.
+    This product ships under Vixeldorf only:
+
+        dotnet build -c Release            (Brand defaults to Vixeldorf)
   -->
 
   <PropertyGroup>
@@ -25,23 +27,30 @@
     <Nullable>disable</Nullable>
 
     <RootNamespace>Openings</RootNamespace>
-    <AssemblyName>Openings</AssemblyName>
-    <Version>0.1.0.0</Version>
-    <Company>Vixeldorf</Company>
-    <Product>Vixeldorf Openings</Product>
+    <AssemblyName>$(BrandAssemblyName)</AssemblyName>
 
-    <!-- net48 keeps the plain path; net8 goes one level down so the two same-named
-         DLLs never overwrite each other. Separate obj folders stop the two inner
-         builds racing on shared intermediates. -->
+    <!-- Brand-scoped. net48 keeps the path the branding engine expects; net8 goes one
+         level down so the two same-named DLLs never overwrite each other. Separate
+         obj folders stop the two inner builds racing on shared intermediates. -->
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <OutputPath>bin\$(Configuration)\</OutputPath>
-    <OutputPath Condition=" '$(TargetFramework)' == 'net8.0-windows' ">bin\$(Configuration)\net8\</OutputPath>
-    <IntermediateOutputPath Condition=" '$(TargetFramework)' == 'net48' ">obj\$(Configuration)\net48\</IntermediateOutputPath>
-    <IntermediateOutputPath Condition=" '$(TargetFramework)' == 'net8.0-windows' ">obj\$(Configuration)\net8\</IntermediateOutputPath>
+    <OutputPath>bin\$(Configuration)\$(Brand)\</OutputPath>
+    <OutputPath Condition=" '$(TargetFramework)' == 'net8.0-windows' ">bin\$(Configuration)\$(Brand)\net8\</OutputPath>
+    <IntermediateOutputPath Condition=" '$(TargetFramework)' == 'net48' ">obj\$(Configuration)\$(Brand)\net48\</IntermediateOutputPath>
+    <IntermediateOutputPath Condition=" '$(TargetFramework)' == 'net8.0-windows' ">obj\$(Configuration)\$(Brand)\net8\</IntermediateOutputPath>
 
+    <!-- Assembly attributes come from the generated BrandInfo.cs / VersionInfo.cs and
+         Properties\AssemblyInfo.cs; the SDK's own set would be duplicates. -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- GenerateAssemblyInfo=false also drops [SupportedOSPlatform("windows")]. Revit only runs on Windows. -->
     <NoWarn Condition=" '$(TargetFramework)' == 'net8.0-windows' ">$(NoWarn);CA1416</NoWarn>
+
     <GenerateDependencyFile>false</GenerateDependencyFile>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+
+    <!-- The XAML uses a local control, so WPF first compiles a temporary copy of this project
+         (Openings_xxxx_wpftmp). The branding engine only recognises the real project by name;
+         without this the copy misses Branding.BrandIcon and the brand resources. -->
+    <_IsBrandedProject Condition=" $(MSBuildProjectName.EndsWith('_wpftmp')) ">true</_IsBrandedProject>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -57,7 +66,7 @@
   </Target>
 
   <ItemGroup>
-    <!-- Loadable-family builder, kept for the later "own families" mode; not compiled yet. -->
+    <!-- Loadable-family builder, kept for a later "own families" mode; not compiled. -->
     <Compile Remove="Future\**" />
     <None Include="Future\**" />
   </ItemGroup>
@@ -73,6 +82,13 @@
       <HintPath>$(RevitApiDir)\RevitAPIUI.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- HttpClient for the update check (part of the framework in net8). -->
+    <Reference Include="System.Net.Http" />
+    <!-- Autodesk.Windows: the ribbon model App.cs uses to keep the shared "About" panel last. -->
+    <Reference Include="AdWindows">
+      <HintPath>$(RevitApiDir)\AdWindows.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <!-- net8: reference assemblies for the oldest 2025 release, from NuGet.
@@ -80,6 +96,53 @@
   <ItemGroup Condition=" '$(TargetFramework)' == 'net8.0-windows' ">
     <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="2025.0.2" ExcludeAssets="runtime" PrivateAssets="all" />
     <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="2025.0.2" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Nice3point.Revit.Api.AdWindows" Version="2025.0.2" ExcludeAssets="runtime" PrivateAssets="all" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Generated before CoreCompile and git-ignored, so they may not exist when the
+         default glob runs on a clean clone: listed explicitly, the Remove avoids duplicates. -->
+    <Compile Remove="Properties\BrandInfo.cs;Properties\VersionInfo.cs" />
+    <Compile Include="Properties\BrandInfo.cs" />
+    <Compile Include="Properties\VersionInfo.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Product command icons. The About/Help icon (web_icon.png) is contributed per
+         brand by _branding\Branding.targets and must not be listed here. -->
+    <EmbeddedResource Include="Resources\*.png" Exclude="Resources\web_icon.png" />
+    <None Include="..\version.json" />
+  </ItemGroup>
+
+  <!-- The XAML refers to local controls (CheckDropDown), so WPF compiles a temporary
+       assembly before CoreCompile; the generated files have to exist by then. -->
+  <Target Name="GenerateBeforeXaml" BeforeTargets="MarkupCompilePass1" DependsOnTargets="GenerateBrandInfo;GenerateVersionInfo" />
+
+  <!-- =================================================================== -->
+  <!-- Single source of truth for the version: ..\version.json             -->
+  <!-- =================================================================== -->
+  <PropertyGroup>
+    <VersionJsonFile>$(MSBuildProjectDirectory)\..\version.json</VersionJsonFile>
+    <GeneratedVersionFile>$(MSBuildProjectDirectory)\Properties\VersionInfo.cs</GeneratedVersionFile>
+  </PropertyGroup>
+
+  <Target Name="GenerateVersionInfo" BeforeTargets="CoreCompile" Inputs="$(VersionJsonFile)" Outputs="$(GeneratedVersionFile)">
+    <ReadLinesFromFile File="$(VersionJsonFile)">
+      <Output TaskParameter="Lines" ItemName="VersionJsonLines" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <VersionJsonText>@(VersionJsonLines, '')</VersionJsonText>
+      <ProductVersion>$([System.Text.RegularExpressions.Regex]::Replace($(VersionJsonText), '(?s)^.*?&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;.*$', '$1'))</ProductVersion>
+    </PropertyGroup>
+    <Error Condition="'$(ProductVersion)' == '' or '$(ProductVersion)' == '$(VersionJsonText)'" Text="Could not read 'version' from version.json" />
+    <ItemGroup>
+      <VersionInfoLines Include="// &lt;auto-generated&gt; — generated from version.json by the GenerateVersionInfo target. Do not edit." />
+      <VersionInfoLines Include="using System.Reflection%3B" />
+      <VersionInfoLines Include="[assembly: AssemblyVersion(&quot;$(ProductVersion)&quot;)]" />
+      <VersionInfoLines Include="[assembly: AssemblyFileVersion(&quot;$(ProductVersion)&quot;)]" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(GeneratedVersionFile)" Lines="@(VersionInfoLines)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <Message Importance="high" Text="Openings version stamped from version.json: $(ProductVersion)" />
+  </Target>
 
 </Project>
