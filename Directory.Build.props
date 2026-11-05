@@ -4,8 +4,7 @@
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(_BrandingPropsImported)' == 'false' ">
-    <!-- Vixeldorf is the only brand this product ships. (The engine still allows
-         -p:Brand=Tes, but no TES GUID block is configured in branding.props.) -->
+    <!-- Vixeldorf by default; -p:Brand=Tes for the in-house build. -->
     <Brand Condition=" '$(Brand)' == '' ">Vixeldorf</Brand>
   </PropertyGroup>
 

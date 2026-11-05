@@ -14,7 +14,11 @@ App Store listing: [docs/appstore-listing.md](docs/appstore-listing.md).
 ## Сборка и установка
 
 - `version.json` — единственный источник версии (DLL, MSI, проверка обновлений в окне).
-- Бренд и GUID — `branding.props` + общий движок `..\_branding` (только Vixeldorf).
+- Бренд и GUID — `branding.props` + общий движок `..\_branding`. Два бренда, выбор при сборке (`-p:Brand=Tes`):
+  - **Vixeldorf** (по умолчанию) — `Openings.dll`, вкладка Vixeldorf → панель Openings, проверка обновлений, публичные релизы;
+  - **TES** — `Openings.TES.dll`, вкладка TES → панель Tools, без проверки обновлений,
+    `C:\ProgramData\TES\Openings`, `Installerin\Release\Tes\Openings_Setup_Tes.msi`. Ставится рядом с Vixeldorf
+    (свои UpgradeCode / AddInId), но одновременно их лучше не загружать: трекер отверстий зарегистрируется дважды.
 - `dotnet build -c Release` в `Openings\` — две сборки: `bin\Release\Vixeldorf\Openings.dll` (net48, Revit 2022–2024, API 2022)
   и `bin\Release\Vixeldorf\net8\Openings.dll` (net8, Revit 2025+, API 2025.0.2 из NuGet).
 - Установщик (WiX 3, нужен MSBuild из Visual Studio):

@@ -3,8 +3,8 @@
   <!--
     Openings. Two assemblies, split at the .NET Framework / .NET boundary:
 
-        net48           Revit 2022-2024, compiled against the 2022 API   bin\<Config>\Vixeldorf\Openings.dll
-        net8.0-windows  Revit 2025+,     compiled against the 2025 API   bin\<Config>\Vixeldorf\net8\Openings.dll
+        net48           Revit 2022-2024, compiled against the 2022 API   bin\<Config>\<Brand>\Openings.dll
+        net8.0-windows  Revit 2025+,     compiled against the 2025 API   bin\<Config>\<Brand>\net8\Openings.dll
 
     Each half is compiled against the OLDEST release it serves. The net8 half uses
     the Revit 2025.0.2 reference assemblies from NuGet (a locally installed 2025.5+
@@ -12,9 +12,10 @@
     BrandNet8MinRevitVersion in ..\branding.props decides which manifests point
     at which DLL.
 
-    This product ships under Vixeldorf only:
+    Both brands, one after the other:
 
-        dotnet build -c Release            (Brand defaults to Vixeldorf)
+        dotnet build -c Release                    (Vixeldorf: Openings.dll)
+        dotnet build -c Release -p:Brand=Tes       (TES: Openings.TES.dll)
   -->
 
   <PropertyGroup>

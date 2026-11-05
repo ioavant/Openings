@@ -7,9 +7,10 @@
     update policy) lives in ..\_branding\<Brand>\brand.props and is shared by
     every add-in. This file only describes THIS product.
 
-    This product ships under Vixeldorf only. The engine still honours
-    -p:Brand=Tes, but no TES GUID block is configured below, so a TES build
-    would fail fast (by design) rather than ship half-branded.
+    Ships under both brands, chosen at build time:
+
+        dotnet build -p:Brand=Vixeldorf      (default; public, update check on)
+        dotnet build -p:Brand=Tes            (in-house; Openings.TES.dll, no update check)
   -->
 
   <PropertyGroup>
@@ -34,10 +35,30 @@
   </PropertyGroup>
 
   <!-- ================================================================= -->
-  <!-- Vixeldorf — the only brand this product ships. Fresh GUIDs, never  -->
-  <!-- shared with another product. UpgradeCode and AddInId must never    -->
-  <!-- change once released: they are how later MSIs upgrade in place and -->
-  <!-- how Revit identifies the add-in.                                   -->
+  <!-- TES — in-house build. Fresh GUIDs, never shared with the Vixeldorf -->
+  <!-- build or another product, so both install side by side.            -->
+  <!-- ================================================================= -->
+  <PropertyGroup Condition=" '$(Brand)' == 'Tes' ">
+    <!-- All TES add-ins share one "Tools" panel on the TES tab. -->
+    <BrandRibbonPanel>Tools</BrandRibbonPanel>
+
+    <BrandUpgradeCode>6EA7BC4B-BFBE-4FEC-927F-083ACE3D0BB2</BrandUpgradeCode>
+    <BrandAddInId>C0E0CE74-AB06-4F95-A7E1-6DE7E40F0605</BrandAddInId>
+  </PropertyGroup>
+
+  <ItemGroup Condition=" '$(Brand)' == 'Tes' ">
+    <BrandAddinComponent Include="2022"><Guid>18B7BB5C-125C-479D-8C54-C284C06F3A26</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2023"><Guid>2BA65CB9-D25A-4964-A7B9-76079BC7642E</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2024"><Guid>2FCA8642-4929-4E1F-B430-2B2564A78EE7</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2025"><Guid>CC891569-0B26-43E5-96EF-0118B3BA2E7E</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2026"><Guid>E42F592D-030B-4CF2-98D5-7AE0927D86D5</Guid></BrandAddinComponent>
+    <BrandAddinComponent Include="2027"><Guid>23A968F6-AE99-47D7-B6B0-C76F24F814A1</Guid></BrandAddinComponent>
+  </ItemGroup>
+
+  <!-- ================================================================= -->
+  <!-- Vixeldorf — public build, the default. Released as 1.0.0, so the  -->
+  <!-- UpgradeCode and AddInId below must never change: they are how     -->
+  <!-- later MSIs upgrade in place and how Revit identifies the add-in.   -->
   <!-- ================================================================= -->
   <PropertyGroup Condition=" '$(Brand)' == 'Vixeldorf' ">
     <BrandRibbonPanel>Openings</BrandRibbonPanel>
